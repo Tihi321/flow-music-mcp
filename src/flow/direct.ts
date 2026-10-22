@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { newestNanoBanana } from "./agent.js";
-import { CANCEL_AFTER_START, CANCEL_BEFORE_START, newErrorIndexes } from "./pure.js";
+import { CANCEL_AFTER_START, CANCEL_BEFORE_START, locateNew, modelOptions, type SnapTile } from "./pure.js";
 import {
   clearBackdrops,
   dismissCookieNotice,
@@ -131,8 +131,9 @@ async function pickModel(page: Page, model: string): Promise<void> {
   await clearBackdrops(page);
 }
 
-// Applies the scene's settings and returns the credit cost Flow quotes for them (read BEFORE anything is started).
-export async function applySettings(page: Page, s: SceneRun): Promise<number> {
+// Applies the scene's settings and returns the credit cost Flow quotes for them (read BEFORE anything is started), plus a
+// note when options the chosen model lacks (Veo: resolution, duration) were skipped.
+export async function applySettings(page: Page, s: SceneRun): Promise<{ quote: number; ignored?: string }> {
   const framesMode = s.type === "video" && Boolean(s.first_frame || s.last_frame || s.frames_attached);
   await openPopover(page);
   await pickRadio(page, s.type === "image" ? "Image" : "Video");
@@ -140,8 +141,11 @@ export async function applySettings(page: Page, s: SceneRun): Promise<number> {
   if (s.aspect) await pickRadio(page, s.aspect);
   const model = s.model && !/^(nano banana( 2)?|latest)$/i.test(s.model.trim()) ? s.model : s.type === "image" ? "latest" : undefined;
   if (model) await pickModel(page, model);
-  if (s.type === "video" && s.resolution) await pickRadio(page, s.resolution);
-  if (s.type === "video" && s.duration) await pickRadio(page, `${s.duration}s`);
+  // The model shown now decides (an unnamed model keeps whatever the composer last used, maybe Veo).
+  const shown = cleanName(await page.getByRole("button", { name: "Select model family" }).innerText().catch(() => ""));
+  const opts = s.type === "video" ? modelOptions(shown, { resolution: s.resolution, duration: s.duration }) : {};
+  if (opts.resolution) await pickRadio(page, opts.resolution);
+  if (opts.duration) await pickRadio(page, `${opts.duration}s`);
   await pickRadio(page, `x${s.variants}`);
   await pause(page, 700);
   const text = await page.getByRole("link", { name: /credits?$/ }).first().innerText();
@@ -150,7 +154,7 @@ export async function applySettings(page: Page, s: SceneRun): Promise<number> {
   await pause(page, 400);
   await clearBackdrops(page);
   if (Number.isNaN(cost)) throw new Error(`Could not read the credit quote from Flow ("${text}").`);
-  return cost;
+  return { quote: cost, ...(opts.ignored ? { ignored: opts.ignored } : {}) };
 }
 
 // ---- Assets: uploads and pickers ----
@@ -296,11 +300,10 @@ async function progressOf(page: Page): Promise<string | undefined> {
 }
 
 // Flow's own Retry on a failed tile re-renders the same prompt free of charge (direct generations only; agent-made error
-// tiles offer Delete alone). Only a failed tile that is new since the job's start is retried (position above the first tile
-// known before Start; the DOM order is the order readTiles returns).
-async function retryErrorTile(page: Page, before: Set<string>): Promise<boolean> {
+// tiles offer Delete alone). Only a failed tile that is new since the job's start is retried (locateNew).
+async function retryErrorTile(page: Page, before: SnapTile[]): Promise<boolean> {
   await scrollToTop(page);
-  const index = newErrorIndexes(await readTiles(page), before)[0];
+  const index = locateNew(before, await readTiles(page)).errors[0];
   if (index === undefined) return false;
   const tile = page.locator("flow-grid-tile-container").nth(index);
   await hoverTile(page, tile);
@@ -316,7 +319,7 @@ async function retryErrorTile(page: Page, before: Set<string>): Promise<boolean>
 // (fm-...), tiles of the wrong kind (a "Save frame" still in a video job) and tiles still counting up are skipped.
 export async function waitForNewMedia(
   page: Page,
-  before: Set<string>,
+  before: SnapTile[],
   count: number,
   kind: SceneType,
   timeoutMs: number,
@@ -380,12 +383,12 @@ export async function runScene(
   const balance = paid ? (await readAccount(page).catch((): { credits?: number } => ({}))).credits : undefined;
   if (paid) await ensureDirectComposer(page);
   progress("applying the settings and reading the quote");
-  const quote = await applySettings(page, s);
+  const { quote, ignored } = await applySettings(page, s);
   if (quote > s.max_credits) {
     throw new Error(`Flow quotes ${quote} credits for this scene, above max_credits=${s.max_credits}. Nothing was generated. Raise max_credits or pick a cheaper model, resolution, duration or variants.`);
   }
   job.note = `quote ${quote} credit(s)`;
-  const notes: string[] = [];
+  const notes: string[] = ignored ? [ignored] : [];
 
   const tag = job.id;
   const framesMode = s.type === "video" && Boolean(s.first_frame || s.last_frame);
@@ -427,7 +430,7 @@ export async function runScene(
   const start = page.getByRole("button", { name: "Start generation" });
   if (!(await start.isEnabled())) throw new Error("Flow's Start generation button is disabled; the prompt or inputs were not accepted.");
   await scrollToTop(page);
-  const before = new Set(await topIds(page));
+  const before = await topIds(page);
   // Last look before the point of no return.
   if (hooks.cancelled()) throw new Error(CANCEL_BEFORE_START);
   progress("generating");

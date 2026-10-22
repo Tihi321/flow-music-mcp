@@ -14,7 +14,7 @@ import {
   topIds,
   type Tile,
 } from "./driver.js";
-import { flowTrouble, sceneRound, tileKey, troubleMessage } from "./pure.js";
+import { flowTrouble, sceneRound, troubleMessage, type SnapTile } from "./pure.js";
 import type { FlowFile, FlowJob, JobOutcome } from "./queue.js";
 
 // Flow's creative agent (the right-hand session panel, `flow-agent-panel`). Since the redesign of 2026-10-22 everything
@@ -355,7 +355,7 @@ function askFor(job: FlowJob, indexes: number[], retry: boolean): string {
 }
 
 // New tiles of this request, once none of them is still rendering.
-async function collectFresh(page: Page, known: Set<string>): Promise<{ tiles: Tile[]; errors: number }> {
+async function collectFresh(page: Page, known: SnapTile[]): Promise<{ tiles: Tile[]; errors: number }> {
   const deadline = Date.now() + 90_000;
   for (;;) {
     const r = await scanNew(page, known);
@@ -389,7 +389,7 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
   try {
     progress("setting the agent's image defaults");
     restore = await setAgentSettings(page, { imageAspect: p.aspect, imageCount: p.variants, imageModel: p.model ?? "latest" });
-    const known = new Set(await topIds(page));
+    let known = await topIds(page);
     let lastProduced: number | undefined;
     for (let round = 0; ; round++) {
       const todo = sceneRound(p.scenes.length, done, round, lastProduced);
@@ -416,7 +416,7 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
       progress("collecting the new tiles");
       const fresh = await collectFresh(page, known);
       failedTiles += fresh.errors;
-      for (const t of fresh.tiles) known.add(tileKey(t));
+      known = await topIds(page); // the next round counts from here
       const images = fresh.tiles.filter((t) => t.kind === "image");
 
       // Tiles finish in any order and the agent may reword, so each is matched to its scene by the prompt Flow stored for it.

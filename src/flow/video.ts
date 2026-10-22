@@ -116,9 +116,9 @@ export async function runContinue(page: Page, job: FlowJob, hooks: Hooks): Promi
       await pause(page, 3500);
     }
     progress("reading the quote");
-    const quote = await applySettings(page, { ...run, frames_attached: !likeness });
+    const { quote, ignored } = await applySettings(page, { ...run, frames_attached: !likeness });
     if (quote > p.max_credits) throw new Error(`Flow quotes ${quote} credits for this continuation, above max_credits=${p.max_credits}. Nothing was generated.`);
-    job.note = `quote ${quote} credit(s)`;
+    job.note = `quote ${quote} credit(s)${ignored ? ` · ${ignored}` : ""}`;
     if (likeness) {
       // R2V: the frame as an ingredient, plus the characters; the opening frame is only approximate.
       const opener = page.getByRole("button", { name: "Add ingredients to the prompt box" });
@@ -128,7 +128,7 @@ export async function runContinue(page: Page, job: FlowJob, hooks: Hooks): Promi
     await typePrompt(page, p.scenes[0]!);
     const start = page.getByRole("button", { name: "Start generation" });
     if (!(await start.isEnabled())) throw new Error("Flow's Start generation button is disabled; the prompt or the frame was not accepted.");
-    const before = new Set(await topIds(page));
+    const before = await topIds(page);
     if (hooks.cancelled()) throw new Error(CANCEL_BEFORE_START);
     progress("generating the continuation");
     await start.click({ timeout: 6000 });

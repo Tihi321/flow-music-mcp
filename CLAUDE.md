@@ -195,6 +195,20 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
 - **Agent video requests** (`flow_agent_images` is images only): the confirm card quotes; first+last-frame chips made the agent choose "Image Interpolation".
 - Status bar quirks: the account button is not on the edit, character or trash views (`flow_status` goes to the grid first); the Google Account link is attached but hidden there.
 
+### FMM-09: live checks (2026-10-22, 33 Flow credits: 1,010 -> 977)
+
+- Direct composer quotes (16:9 x1): Veo 3.1 Lite 10, Fast 20, Quality 100; Omni 1.1 Flash 360p 4 s 4, 720p 4 s 7. Under Veo the
+  popover has no resolution or duration radios: `applySettings` skips them with a note (`modelOptions` in pure.ts).
+- Local `first_frame` (4): the upload tile is titled `fm-<job>-start.jpeg`; the clip's first frame is the local image.
+- `chain_previous` (8): the second clip's first frame equals the first clip's last frame (checked visually).
+- Omni 720p 4 s (7): 1280x720, 4.0 s. Veo 3.1 Lite (10): 1280x720, 8.0 s.
+- `flow_continue` likeness with Kai (4): Kai walks into the same classroom and picks up the plane.
+- Bugs found and fixed live: (1) `listProjects` read the home page before its project cards loaded ("Projects: none") -> waits for
+  the first card; (2) a video's key flips from its uuid to `asb:` a while after it finishes, so a clip finished just before a job
+  looked new and got downloaded instead of the job's own clip -> new tiles are found by aligning the before/after grids by
+  position (`locateNew` in pure.ts), and a download whose tile title differs from the expected one fails instead.
+- Not run: a local `last_frame`, the 4K image download.
+
 ### FMM-08: video identity, trouble, cancel (2026-10-22)
 
 - Mapped read-only: a settled video tile has no uuid anywhere; its thumbnail is `img[alt="Generated video thumbnail"]` with `src="https://flow.google.com/asb/<token>"`, and on a real pointer hover the img becomes a `<video>` whose src is the same token plus more characters. The thumbnail URL was the same before and after a page reload (5 tiles); how long it lasts is unknown.
