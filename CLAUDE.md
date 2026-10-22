@@ -8,7 +8,9 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
 - `src/chrome.ts` launch/attach Chrome, `getPage(site)`, per-site lock · `src/music.ts` Flow Music UI driver · `src/queue.ts` paced job queue ·
   `src/flow/` Google Flow: `driver.ts`, `agent.ts`, `queue.ts`, `tools.ts` (see "Flow UI map") ·
   `src/mcp/tools.ts` the MCP tools · `src/mcp/http.ts` + `server.ts` transport (copied from comfy-mcp) · `src/login.ts`
-- Build `yarn build`; run `node dist/index.js`; sign in once with `yarn login`.
+- Build `yarn build`; run `node dist/index.js`; sign in once with `yarn login`. Settings and keys: `.env` (see `.env.example`).
+- `ROADMAP.md`: what is still missing or unverified, most important first. Start there; tick items off (or move them to a
+  ticket) when they are done, and add what you find.
 
 ## Rules
 
