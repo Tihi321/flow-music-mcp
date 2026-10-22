@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+// .env first, before any module reads process.env (see src/env.ts and .env.example).
+import "./env.js";
 import { McpHttpServer } from "./mcp/http.js";
 import { buildTools } from "./mcp/tools.js";
 
-// flow-music-mcp: an MCP server (Streamable HTTP on 127.0.0.1) that drives Google Flow Music in a dedicated Chrome profile.
+// flow-music-mcp: an MCP server (Streamable HTTP on 127.0.0.1) that drives Google Flow and Google Flow Music in a
+// dedicated Chrome profile, plus local voice, assembly and caption tools.
 //
 //   node dist/index.js [--port 7462]
 //

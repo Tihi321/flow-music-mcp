@@ -35,7 +35,17 @@ claude mcp add --transport http flow-music-mcp http://127.0.0.1:7462/mcp
 
 A generation runs as a job: the call waits up to `wait` seconds (default 30) and otherwise returns a job id for `music_wait`. Jobs run one at a time with a 20-45 s pause between them.
 
-## Settings
+## Keys and settings
+
+Settings are environment variables, and you can keep them in a `.env` file instead of setting them in Windows:
+
+1. Copy `.env.example` to `.env` in this folder, or to `%USERPROFILE%\.flow-music-mcp\.env` (that one survives a fresh clone).
+2. Fill in what you need, for example `GEMINI_API_KEY=...` for the Gemini voices (get a key at https://aistudio.google.com/apikey).
+3. Restart the server.
+
+Flow asks "Rights to use this image" before it takes a local file (a first frame, a reference picture). The tool clicks "I agree" only when you have written `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree` in `.env` yourself, and only for files you give it; otherwise it cancels and nothing is uploaded (images already in Flow work as `asset:<media_id>` either way). `flow_status` shows the current setting as `upload_rights`.
+
+`.env` is in `.gitignore`, so keys are never committed. Precedence: a real environment variable, then this folder's `.env`, then the one in `%USERPROFILE%\.flow-music-mcp`. The Gemini key can also live in `%USERPROFILE%\.flow-music-mcp\gemini-key` (what `flow_set_key` writes, after checking the key with Google), and the old flow-mcp file `%USERPROFILE%\.flow-mcp\gemini-key` is still read. No tool ever shows more than a key's last 4 characters.
 
 | Env | Default | |
 |---|---|---|

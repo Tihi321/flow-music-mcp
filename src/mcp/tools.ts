@@ -2,10 +2,13 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp } from "../chrome.js";
 import { downloadSong, generate, inspect, listSongs, signedIn, withPage, type AudioFormat } from "../music.js";
+import { buildLocalFlowTools } from "../flow/local-tools.js";
+import { buildFlowTools } from "../flow/tools.js";
 import { JobQueue, type Job } from "../queue.js";
 
 // The MCP tools. The tool shapes follow comfy-mcp (src/mcp/tools.ts): a generation is a background job, the call waits up
-// to `wait` seconds and returns the result or the job id, and music_wait collects it.
+// to `wait` seconds and returns the result or the job id, and music_wait collects it. The Flow Music tools (music_*) are
+// built here; the Google Flow tools (flow_*) come from src/flow/tools.ts and are listed after them.
 
 export interface Tool {
   name: string;
@@ -62,6 +65,10 @@ const jobView = (job: Job) => ({
 });
 
 export function buildTools(): Tool[] {
+  return [...buildMusicTools(), ...buildFlowTools(), ...buildLocalFlowTools()];
+}
+
+function buildMusicTools(): Tool[] {
   const def = <S extends z.ZodType>(name: string, description: string, schema: S, run: (args: z.output<S>) => Promise<unknown>): Tool => ({
     name,
     description,
