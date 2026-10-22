@@ -6,7 +6,8 @@ import type { Tool } from "../mcp/tools.js";
 import { runImages } from "./agent.js";
 import { extractAudio, extractLastFrame } from "./chain.js";
 import { createCharacter, editCharacter, editImage, listCharacters } from "./characters.js";
-import { runScene } from "./direct.js";
+import { runScene, uploadRightsAgreed } from "./direct.js";
+import { capOf, defaultMaxCredits } from "./limits.js";
 import { downloadTile, downloadTileAll, ensureProjectGrid, findTile, flowState, inspect, listAssets, openProject, scanGrid, tileResolver, trashTile, type ImageSize } from "./driver.js";
 import { FlowJobQueue, type Aspect, type FlowJob } from "./queue.js";
 import { TECHNIQUES } from "./techniques.js";
@@ -46,8 +47,8 @@ const slug = (s: string) =>
 // Guidance handed to the calling model through flow_status, so it plans work Flow can run.
 const PLAYBOOK = [
   "Call flow_status first. If it has a hint (not signed in, Chrome down), relay it to the user and stop.",
-  "Flow images (Nano Banana) are free. Flow video (flow_generate type video, flow_continue, flow_edit on a video, flow_narrate engine flow) SPENDS CREDITS: ask the user first and set max_credits; flow_generate and flow_continue read the composer's live quote and refuse before starting if it is above max_credits (Omni 1.1 Flash 360p 4 s = 4 credits).",
-  "flow_generate makes one image or clip per scene as separate paced jobs (25-70 s apart) in Flow's direct composer with the exact prompt; flow_agent_images asks the agent for many free images in one request and is much faster for sets. Uploading a local file asks you to confirm rights in Flow ('I agree'): that is the user's to give; asset:<media_id> needs no upload.",
+  "Flow images (Nano Banana) are free. Flow video (flow_generate type video, flow_continue, flow_edit on a video, flow_narrate engine flow) SPENDS CREDITS: ask the user first. Each paid call is capped by max_credits, by default the user's FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset; see max_credits_default in flow_status); flow_generate and flow_continue read the composer's live quote and refuse before starting if it is above max_credits (Omni 1.1 Flash 360p 4 s = 4 credits).",
+  "flow_generate makes one image or clip per scene as separate paced jobs (25-70 s apart) in Flow's direct composer with the exact prompt; flow_agent_images asks the agent for many free images in one request and is much faster for sets. Uploading a local file makes Flow ask for a rights confirmation ('I agree'). That is the user's to give: the tool agrees only when the user has set FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree in .env (see upload_rights in flow_status), and only for files the user gave. Never set it or ask to have it set on the user's behalf; asset:<media_id> needs no upload.",
   "A call waits up to `wait` seconds and otherwise returns job ids: call flow_wait until finished is true. Never generate the same scene again while its job is running.",
   "Files are saved as <name>-NN.jpeg in the output folder, NN being the scene number; extra variants are -NN-v2. A note 'still failed: scene N' means flow_retry makes just those again.",
   "Write prompts in English, one image per scene, and repeat the full description of a recurring character or product in every scene: the agent has no memory between scenes.",
@@ -236,6 +237,10 @@ export function buildFlowTools(): Tool[] {
           cdp_port: CDP_PORT,
           profile: PROFILE_DIR,
           default_out: DEFAULT_FLOW_OUT,
+          // The cap a paid call gets when it passes no max_credits (FLOW_MUSIC_MCP_MAX_CREDITS in .env, 50 if unset).
+          max_credits_default: defaultMaxCredits(),
+          // The user's own setting (FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree in .env): whether local files may be uploaded.
+          upload_rights: uploadRightsAgreed() ? "agree (set by the user in .env: local files the user gives are uploaded)" : "ask (local files are not uploaded; use asset:<media_id>, or the user sets FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree)",
           paused: queue.pausedReason ?? undefined,
           jobs: queue.list().map(jobView),
           playbook: PLAYBOOK,
@@ -255,7 +260,7 @@ export function buildFlowTools(): Tool[] {
               aspect_ratio: aspect.optional().describe("Video supports 16:9 and 9:16 only. Default: the composer's current one."),
               duration: z.union([z.literal(4), z.literal(6), z.literal(8), z.literal(10)]).optional().describe("Video length in seconds. Omni models only; Veo 3.1 clips are fixed at 8 s."),
               resolution: z.enum(["360p", "720p"]).optional().describe("Video resolution. Omni models only."),
-              max_credits: z.number().int().min(0).optional().describe("Spending cap per scene: refused BEFORE starting if the live quote is higher. Required for video; images are free (0)."),
+              max_credits: z.number().int().min(0).optional().describe("Spending cap per scene: refused BEFORE starting if the live quote is higher. Video default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset). Images are free (0)."),
               variants: z.number().int().min(1).max(4).optional().describe("Outputs per prompt (video variants each spend credits). Default 1."),
               first_frame: z.string().optional().describe("First frame (video): absolute image path, or 'asset:<media_id or title>' for an image already in the project."),
               last_frame: z.string().optional().describe("Last frame (video): absolute image path, or 'asset:<media_id or title>'."),
@@ -281,7 +286,6 @@ export function buildFlowTools(): Tool[] {
         const stem = slug(a.name ?? "scene");
         const first = a.start_number ?? nextNumber(output_dir, stem);
         for (const [i, s] of a.scenes.entries()) {
-          if (s.type === "video" && !s.max_credits) throw new Error(`Scene ${i + 1}: video spends credits, so max_credits is required (the live quote is checked against it before anything starts). Ask the user first.`);
           if (s.chain_previous && (i === 0 || s.first_frame || s.type !== "video")) throw new Error(`Scene ${i + 1}: chain_previous needs a preceding video scene in the same call and cannot be combined with first_frame.`);
           if (s.reference_previous && i === 0) throw new Error("Scene 1 has no previous scene to reference.");
           if (s.technique && !TECHNIQUES.some((t) => t.id === s.technique)) throw new Error(`Unknown technique "${s.technique}". Call flow_techniques for valid ids.`);
@@ -310,7 +314,8 @@ export function buildFlowTools(): Tool[] {
               reference_from: s.reference_previous ? jobs[i - 1]!.id : undefined,
               retries: s.retries,
               download_quality: s.download_quality,
-              max_credits: s.max_credits ?? 0,
+              // Video: the caller's cap or the default from .env; images: 0 (free; a paid image model is refused).
+              max_credits: s.type === "video" ? capOf(s.max_credits) : (s.max_credits ?? 0),
               output_dir,
               file_stem: stem,
               label: s.prompt.slice(0, 60),
@@ -492,7 +497,7 @@ export function buildFlowTools(): Tool[] {
       z.object({
         from_asset: z.string().min(1).describe("Media id (from flow_assets) or title (prefix) of the video to continue."),
         prompt: z.string().min(1).describe("What happens in the new clip, as one continuous shot with one camera move."),
-        max_credits: z.number().int().min(1).describe("Spending cap: refused before starting if the live quote is higher."),
+        max_credits: z.number().int().min(1).optional().describe("Spending cap: refused before starting if the live quote is higher. Default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset)."),
         attach: z.array(z.string().min(1)).max(3).optional().describe("Characters to keep, by name (likeness mode only)."),
         mode: z.enum(["exact", "likeness"]).default("exact"),
         aspect_ratio: z.enum(["16:9", "9:16"]).default("16:9"),
@@ -523,7 +528,7 @@ export function buildFlowTools(): Tool[] {
           attach: a.attach,
           mode: a.mode,
           download_quality: a.download_quality,
-          max_credits: a.max_credits,
+          max_credits: capOf(a.max_credits),
           output_dir,
           file_stem: stem,
           label: `continue ${a.from_asset}`.slice(0, 60),
@@ -537,7 +542,7 @@ export function buildFlowTools(): Tool[] {
       z.object({
         asset: z.string().min(1).describe("Media id (from flow_assets) or title of the image or video to edit."),
         prompt: z.string().min(1).describe("What to change, e.g. 'make the lantern blue', 'make it snow', 'remove the cup'."),
-        max_credits: z.number().int().min(0).optional().describe("Required for a video edit: the balance must cover it before starting; the measured cost is reported (it cannot be quoted in advance)."),
+        max_credits: z.number().int().min(0).optional().describe("Video edit only: the balance must cover it before starting, and the measured cost is reported (the edit view shows no quote). Default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset)."),
         size: size,
         download_quality: z.enum(["original", "upscaled"]).optional().describe("Video download: original or upscaled (720p)."),
         project,
@@ -561,7 +566,6 @@ export function buildFlowTools(): Tool[] {
           return found.kind === "video" ? "video" : "image";
         });
         if (kind === "video") {
-          if (!a.max_credits) throw new Error("A video edit spends credits (about 10-20 for a short clip; the edit view shows no quote): pass max_credits and ask the user first.");
           const job = queue.add({
             kind: "edit_video",
             scenes: [a.prompt],
@@ -572,7 +576,7 @@ export function buildFlowTools(): Tool[] {
             size: "1K",
             asset: a.asset,
             download_quality: a.download_quality,
-            max_credits: a.max_credits,
+            max_credits: capOf(a.max_credits),
             output_dir,
             file_stem: stem,
             label: `edit ${a.asset}`.slice(0, 60),

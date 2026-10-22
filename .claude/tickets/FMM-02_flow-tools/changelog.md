@@ -1,5 +1,27 @@
 # FMM-02 changelog
 
+## 2026-10-22: upload rights setting and a default credit cap for paid calls
+
+Summary: two settings the user writes in `.env`. `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree` lets the tool answer Flow's "Rights to use this image" with I agree for files the user gives it (anything else: cancel, nothing uploaded). `FLOW_MUSIC_MCP_MAX_CREDITS` (default 50) caps a paid call that passes no `max_credits` (user: videos are few, so a generous default is fine; images are free).
+
+### Files changed
+- `src/flow/direct.ts`: `uploadRightsAgreed()` (only the exact value "agree"); `uploadAsset` clicks I agree when it is set, otherwise cancels with instructions.
+- `src/flow/limits.ts` (new): `defaultMaxCredits()` (unset, empty or invalid → 50; 0 means no paid work), `capOf()`.
+- `src/flow/tools.ts`: video scenes, `flow_continue` and video `flow_edit` use `capOf(max_credits)` instead of requiring it; images keep 0; `flow_status` reports `max_credits_default` and `upload_rights`; playbook text.
+- `src/flow/local-tools.ts`: `flow_narrate` engine flow uses `capOf`.
+- `.env.example`, `README.md`: both settings.
+
+### Verification
+- `yarn build` clean. `defaultMaxCredits()` for unset/""/"30"/"abc"/"0": 50/50/30/50/0; an explicit call value (12) wins.
+- Live, nothing spent (balance 1,010 before and after): `flow_status` shows `max_credits_default: 50`, `upload_rights: ask`; a local reference image without the setting was cancelled at the rights dialog with the instructions; a Veo 3.1 Quality video with no max_credits was quoted 100 and refused at the default 50 before starting.
+- Found and fixed while testing: an empty value parsed as 0 (refused every video).
+
+### Not run
+- The agree path: clicking I agree is the user's declaration, so it is tested only after the user writes the setting.
+
+### Commit status
+Committed and pushed with this entry.
+
 ## 2026-10-22: phases 5-7, characters, edits, video, Flow voices; hub switched to flow-music-mcp
 
 Summary: flow-music-mcp now has 32 tools, all 20 of flow-mcp's plus `flow_inspect`, `flow_set_key` and `flow_speech_setup`, rebuilt for Flow's redesign. Single shots and videos go through Flow's direct composer (exact prompt, live credit quote checked against `max_credits` before Start); image sets go through the agent. The hub no longer uses flow-mcp.

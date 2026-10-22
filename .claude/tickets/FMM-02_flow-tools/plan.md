@@ -97,9 +97,10 @@ Each phase ends with `yarn build`, an MCP call through `hub.ps1 call flow-music-
 - **.env (user, 2026-10-22: a way to add keys by hand, without a model):** `src/env.ts` loads `<repo>/.env`, then `~/.flow-music-mcp/.env`, with Node's `process.loadEnvFile` (a real environment variable wins, then the first file). `.env.example` lists every setting; `.env` is in `.gitignore`. keys.ts imports env.ts; **index.ts must import "./env.js" first** (added after implementer A finishes, since A owns index.ts). Verified with fake keys in a temp home: the .env key is found (last4 only), and a real env var wins.
 - **API keys (user asked where they go):** Gemini key lookup order: env `GEMINI_API_KEY` → `~/.flow-music-mcp/gemini-key` → `~/.flow-mcp/gemini-key` (already holds the user's key). Tool `flow_set_key {key}` writes `~/.flow-music-mcp/gemini-key`. Never print, log or return a key (at most its last 4 characters).
 
-## Open (for the user)
+## Upload rights and credit cap (user, 2026-10-22)
 
-- **Upload rights.** Flow asks "Rights to use this image" (`I agree` / `Cancel`, links to its Prohibited Use Policy) before it takes a local image. The driver never clicks `I agree` by itself. Option: an opt-in setting the user writes in `.env` (e.g. `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree`) that makes the driver agree for files the user passes; until then such uploads are done once by hand in the Flow window.
+- Upload rights: `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree`, written by the user in `.env`, makes the driver click I agree for files the user gives; otherwise it cancels. The agree path is tested once the user has set it.
+- Credit cap: `FLOW_MUSIC_MCP_MAX_CREDITS` (default 50) for paid calls without `max_credits`; the live quote is still checked before Start. Images free.
 
 ## Decisions (user, 2026-10-22)
 

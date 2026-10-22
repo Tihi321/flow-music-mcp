@@ -7,6 +7,7 @@ import { assemble, voiceTrack } from "./assemble.js";
 import { burnCaptions, captionedName, captionSetup, prepareSpeech, transcribe } from "./captions.js";
 import { GEMINI_VOICES, speakWithGemini } from "./gemini.js";
 import { keyStatus, setGeminiKey } from "./keys.js";
+import { capOf } from "./limits.js";
 import { TECHNIQUES } from "./techniques.js";
 import { narrateWithFlow } from "./tools.js";
 import { speakWithWindows, windowsVoices } from "./voices.js";
@@ -95,8 +96,8 @@ export function buildLocalFlowTools(): Tool[] {
         engine: z
           .enum(["gemini", "windows", "flow"])
           .default("gemini")
-          .describe("'gemini' uses Google AI Studio's text-to-speech: free tier, no length limit, needs a key. 'windows' uses a voice installed on this PC: free, instant, no key. 'flow' makes a paid Flow take (needs max_credits)."),
-        max_credits: z.number().int().min(1).optional().describe("Engine flow only (required there): the live quote of the take must not exceed it."),
+          .describe("'gemini' uses Google AI Studio's text-to-speech: free tier, no length limit, needs a key. 'windows' uses a voice installed on this PC: free, instant, no key. 'flow' makes a paid Flow take (capped by max_credits)."),
+        max_credits: z.number().int().min(1).optional().describe("Engine flow only: the live quote of the take must not exceed it. Default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset)."),
         project: z.string().optional().describe("Engine flow only: the Flow project (name or id) to make the take in. Default: the project open in the Flow tab."),
         image: z.string().optional().describe("Engine flow only: the picture the voice speaks from (Flow needs one): 'asset:<media_id or title>' or an absolute path. Default: the project's newest image."),
         text: z.string().min(1).max(400).describe("The line to speak. About 20 words fits 8 s, 30 words fits 12 s; anything longer needs a longer take."),
@@ -108,9 +109,8 @@ export function buildLocalFlowTools(): Tool[] {
         mkdirSync(output_dir, { recursive: true });
         const stem = (a.name ?? "").replace(/[^\w.-]+/g, "_") || nextStem(output_dir, "narration");
         if (a.engine === "flow") {
-          if (!a.max_credits) throw new Error('engine "flow" spends credits: pass max_credits (the live quote is checked against it before anything starts). Ask the user first.');
           const voice = a.voice === "Charon" || !a.voice ? "Charon" : a.voice;
-          return narrateWithFlow({ text: a.text, voice, out: output_dir, name: stem, max_credits: a.max_credits, project: a.project, image: a.image });
+          return narrateWithFlow({ text: a.text, voice, out: output_dir, name: stem, max_credits: capOf(a.max_credits), project: a.project, image: a.image });
         }
         const target = join(output_dir, `${stem}.m4a`);
         const voice = a.engine === "windows" && a.voice === "Charon" ? "Microsoft Zira Desktop" : a.voice;

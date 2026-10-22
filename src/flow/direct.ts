@@ -159,6 +159,10 @@ async function waitForUpload(page: Page, prefix: string, timeoutMs: number): Pro
   await pause(page, 1000);
 }
 
+// The user's standing answer to Flow's "Rights to use this image" dialog, set by the user and nobody else: only the exact
+// value "agree" counts (not 1, true or yes), so it cannot be switched on by accident.
+export const uploadRightsAgreed = (): boolean => (process.env.FLOW_MUSIC_MCP_UPLOAD_RIGHTS ?? "").trim().toLowerCase() === "agree";
+
 // Uploads under a unique name (fm-<job>-<label>) so the asset can be picked unambiguously afterwards. Returns the name
 // prefix to pick it by. The grid must be showing (not the agent panel's view).
 export async function uploadAsset(page: Page, jobTag: string, file: string, label: string): Promise<string> {
@@ -172,13 +176,19 @@ export async function uploadAsset(page: Page, jobTag: string, file: string, labe
   await page.getByRole("menuitem").filter({ hasText: /Upload\s*$/ }).first().click({ timeout: 5000 });
   await (await chooser).setFiles(staged);
   // Flow asks for a confirmation of the rights to an uploaded file ("Rights to use this image": Cancel / I agree). That is
-  // the user's declaration to make, never ours: stop and say so.
+  // the user's declaration: it is given only when the user wrote FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree in .env (or the
+  // environment) themselves. Otherwise the dialog is cancelled and nothing is uploaded.
   const rights = page.getByText("Rights to use this image");
   if (await rights.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false)) {
-    await page.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 4000 }).catch(() => {});
-    throw new Error(
-      "Flow asks you to confirm you have the rights to files you upload (a dialog with Cancel / I agree). That is your declaration to make, so it was cancelled and nothing was uploaded. Upload any image once by hand in the Flow Chrome window (Add media > Upload, then I agree), or use asset:<media_id> for images already in the project, and try again.",
-    );
+    if (uploadRightsAgreed()) {
+      await page.getByRole("button").filter({ hasText: /^\s*I agree\s*$/ }).first().click({ timeout: 4000 });
+      await rights.waitFor({ state: "hidden", timeout: 10_000 });
+    } else {
+      await page.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 4000 }).catch(() => {});
+      throw new Error(
+        "Flow asks you to confirm you have the rights to files you upload (a dialog with Cancel / I agree). That is your declaration to make, so it was cancelled and nothing was uploaded. To let this tool agree for the files you give it, write FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree in flow-music-mcp's .env (or %USERPROFILE%\\.flow-music-mcp\\.env) and restart the server. Otherwise upload the image once by hand in the Flow Chrome window (Add media > Upload, then I agree), or use asset:<media_id> for images already in the project.",
+      );
+    }
   }
   await waitForUpload(page, prefix, 90_000);
   return prefix;
