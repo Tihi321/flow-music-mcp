@@ -4,8 +4,8 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 
 ## Where it stands (2026-10-22, master 8e7d01e)
 
-- **One MCP server for both Google sites** on `127.0.0.1:7462/mcp`, with 32 tools:
-  - Flow Music (`music_*`): 9 tools.
+- **One MCP server for both Google sites** on `127.0.0.1:7462/mcp`, with 35 tools:
+  - Flow Music (`music_*`): 12 tools (FMM-07 added `music_remix`, `music_video`, `music_loop`).
   - Google Flow (`flow_*`): 15 tools for images, video, characters, edits, assets and downloads.
   - Local tools: 8, for narration (Gemini, Windows, Flow voices), assembly, transcription, captions, speech setup, key and techniques.
 - **Chrome:** one Chrome profile (`~/.flow-music-mcp/chrome-profile`, CDP 9334) with a tab per site, signed in as the user's PRO account.
@@ -29,9 +29,9 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 - ~~The cost per song is unknown.~~ FMM-06: 5 credits a song; `music_status` shows the balance (sidebar Settings menu) and jobs report `credits_spent`.
 - **Failure states are guessed.** A failed take and "out of credits" have never been seen; `songState` guesses from the row text. Since FMM-06 a failed or timed-out job saves a page dump to `~/.flow-music-mcp/debug/` and names it in the error; read it the first time one happens.
 - ~~`music_download` for a song not on the current page~~: FMM-06 mapped `/song/<id>` and downloads from it (verified).
-- **One generation at a time.** The user's plan allows several at once; the music queue runs them one by one with a 20-45 s pause. Option: a `concurrency` setting.
-- **Not exposed:** Remix, stems ("Get stems", "Split stems"), the music video ("Download video"), and the Producer chat route.
-- **Loops for visual novels.** Flow Music tracks play through; VN Studio wants loops. Options: loop-friendly prompts, or an ffmpeg tool that finds a loop point and crossfades it.
+- ~~**One generation at a time.**~~ Left out on purpose (user's decision, FMM-07): one song at a time at human pace, one tab per site. The plan allows several at once; a `concurrency` setting would be the way if that ever changes.
+- ~~**Not exposed:** Remix, the music video~~ FMM-07 exposes `music_remix` (Variation, Extend) and `music_video` (both verified live; remix 5 credits, the simple video free). Still not exposed: Remix Cover, Replace, Trim, Start session, Use prompt; stems ("Get stems" fetched `/__api/stems/clip/<id>` and produced nothing; it probably needs "Split stems" first, which was never clicked); and the Producer chat route (the Compose panel is used instead, on purpose). `music_video` templates other than `simple` have unknown cost.
+- ~~**Loops for visual novels.**~~ FMM-07: `loop_friendly` on `music_generate` (wording hint) and `music_loop` (ffmpeg: band-level matching, crossfade, seam check). Open: judge by ear whether the picked points sound musical (no beat or bar detection yet; a track that never repeats gets a poor `score`).
 
 ## Flow
 

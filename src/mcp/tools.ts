@@ -1,11 +1,12 @@
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, closedWindowError, withSitePage } from "../chrome.js";
-import { downloadSong, generate, inspect, listSongs, readCredits, signedIn, type AudioFormat } from "../music.js";
+import { makeLoop } from "../loop.js";
+import { downloadSong, downloadVideo, generate, inspect, listSongs, readCredits, remix, signedIn, type AudioFormat } from "../music.js";
 import { buildLocalFlowTools } from "../flow/local-tools.js";
 import { buildFlowTools } from "../flow/tools.js";
 import { JobQueue, type Job } from "../queue.js";
-import { lengthValid, slug as slugOf } from "../util.js";
+import { lengthValid, loopFriendlySound, slug as slugOf, songIdOf } from "../util.js";
 
 // The MCP tools. The tool shapes follow comfy-mcp (src/mcp/tools.ts): a generation is a background job, the call waits up
 // to `wait` seconds and returns the result or the job id, and music_wait collects it. The Flow Music tools (music_*) are
@@ -74,7 +75,7 @@ function buildMusicTools(): Tool[] {
 
   const queue = new JobQueue((job) =>
     withSitePage("music", (page) =>
-      generate(page, job.params, (note) => {
+      ("remix" in job.params ? remix : generate)(page, job.params as never, (note) => {
         job.progress = note;
       }),
     ).catch((err) => {
@@ -122,6 +123,10 @@ function buildMusicTools(): Tool[] {
           lyrics: z.string().optional().describe("Lyrics with section tags such as [Intro], [Verse 1], [Chorus], [Outro]. Leave out (with instrumental false) to let Flow Music write them"),
           instrumental: z.boolean().optional().describe("No vocals (Compose's instrumental switch)"),
           title: z.string().optional().describe("Song title (Compose's Details box)"),
+          loop_friendly: z
+            .boolean()
+            .optional()
+            .describe('Appends "seamless loop, steady energy throughout, no intro, no fade-out, ends where it began" to the Sound description. A hint to the model only: the take may still fade. music_loop finds the loop point afterwards.'),
           bpm: z.number().int().min(30).max(300).optional().describe("Tempo (Advanced)"),
           length: z
             .string()
@@ -137,7 +142,7 @@ function buildMusicTools(): Tool[] {
       }),
       async (a) => {
         const job = queue.add({
-          sound: a.sound,
+          sound: a.loop_friendly ? loopFriendlySound(a.sound) : a.sound,
           lyrics: a.lyrics,
           instrumental: a.instrumental,
           title: a.title,
@@ -151,6 +156,58 @@ function buildMusicTools(): Tool[] {
         });
         return settle(job, a.wait);
       },
+    ),
+    def(
+      "music_remix",
+      "Remixes an existing Flow Music song from its song page (Remix menu) and downloads the new take. mode `variation`: a new take with the same sound and lyrics and a new seed, titled \"<title> (Remix)\". mode `extend`: Flow Music continues the song from its default extension range (shown on the song page as EXTENDED FROM), titled \"<title> (Extended)\"; `instruction` steers it. SPENDS FLOW MUSIC CREDITS: 5 per remix (measured 2026-10-22 for both modes): ask the user before the first one. A background job like music_generate (credits_spent is reported; music_wait collects it). Cover, Replace and Trim exist in the menu but are not exposed.",
+      z.object({
+        song_id: z.string().min(8).describe("The song to remix: an id from music_songs or a job, or a flowmusic.app/song/<id> link"),
+        mode: z.enum(["variation", "extend"]),
+        instruction: z.string().max(1000).optional().describe("Extend only: what the extension should do (the Instruction box). Ignored for variation."),
+        format,
+        out,
+        name: z.string().optional().describe("File name stem (default: <song id first 8>-<mode>)"),
+        wait,
+      }),
+      async (a) => {
+        const id = songIdOf(a.song_id) ?? a.song_id;
+        const job = queue.add({
+          remix: { song_id: id, mode: a.mode, ...(a.mode === "extend" && a.instruction ? { instruction: a.instruction } : {}) },
+          format: a.format as AudioFormat,
+          output_dir: a.out ?? DEFAULT_OUT,
+          file_stem: slug(a.name ?? `${id.slice(0, 8)}-${a.mode}`),
+        });
+        return settle(job, a.wait);
+      },
+    ),
+    def(
+      "music_video",
+      "Makes the music video of an existing Flow Music song (song menu > Download > Download video) and saves it as <name>.mp4. template `simple` (default) cost 0 credits when measured (2026-10-22); `player`, `modern` and `music_video` were never tried and their cost is UNKNOWN: ask the user before using them. A first render can take more than 3 minutes with nothing shown, so this call runs until the file arrives (up to timeout_minutes, default 15) and the MCP client must allow a call that long; the Flow Music tab stays on the song page meanwhile and other Flow Music tools wait. Asking again for a song already rendered returns at once.",
+      z.object({
+        song_id: z.string().min(8).describe("An id from music_songs or a job, or a flowmusic.app/song/<id> link"),
+        template: z.enum(["simple", "player", "modern", "music_video"]).default("simple"),
+        out,
+        name: z.string().optional().describe("File name stem (default: the song id)"),
+        timeout_minutes: z.number().min(1).max(15).default(15),
+      }),
+      async (a) => {
+        const id = songIdOf(a.song_id) ?? a.song_id;
+        return withSitePage("music", (page) => downloadVideo(page, id, a.template, join(a.out ?? DEFAULT_OUT, slug(a.name ?? id)), a.timeout_minutes * 60_000)).catch((err) => {
+          throw closedWindowError("music", err);
+        });
+      },
+    ),
+    def(
+      "music_loop",
+      "Finds a seamless loop in an audio file (local ffmpeg, no browser, no credits) and writes it as <name>-loop.<ext> in the same format (.wav, .mp3 or .m4a), the end crossfaded into the start so it repeats without a click. It skips the fade-in and fade-out, compares band levels around candidate points and picks the best pair at least min_seconds apart (the shorter wins a tie). Returns loop_start_s, loop_end_s, loop_seconds, score (1 = identical around the seam, 0 = 12 dB apart), distance_db and seam checks on the written file (seam.clean: no level jump or click beyond the loop's own). It cannot make a loop from a track that never repeats: check score, and use music_generate with loop_friendly for sources.",
+      z.object({
+        input: z.string().min(1).refine(isAbsolute, "must be an absolute path").describe("Absolute path of a .wav, .mp3 or .m4a file, e.g. a song from music_generate"),
+        min_seconds: z.number().min(2).max(170).default(20).describe("The loop is at least this long"),
+        crossfade_ms: z.number().int().min(50).max(5000).default(1500).describe("Length of the crossfade from the end back into the start"),
+        out,
+        name: z.string().optional().describe("File name stem (default <input name>-loop)"),
+      }),
+      async (a) => makeLoop({ input: a.input, output_dir: a.out ?? DEFAULT_OUT, ...(a.name ? { stem: slug(a.name) } : {}), min_seconds: a.min_seconds, crossfade_ms: a.crossfade_ms }),
     ),
     def(
       "music_wait",

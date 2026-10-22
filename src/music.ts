@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { HOME_DIR, MUSIC_URL, withDownloadLock } from "./chrome.js";
-import { audioExtensionOfBytes, classifySongText, lengthValid, modelItemPattern, parseCredits, renderingNote } from "./util.js";
+import { audioExtensionOfBytes, classifySongText, lengthValid, mediaExtensionOfBytes, modelItemPattern, parseCredits, remixItemPattern, renderingNote, videoTemplateCard, type VideoTemplate } from "./util.js";
 
 // The Flow Music UI driver. Every selector here was mapped from the live page (see CLAUDE.md, "UI map"); never guess one.
 // Flow Music is driven through its Compose panel, not the Producer chat: Compose takes the sound, lyrics and title as
@@ -24,6 +24,18 @@ export interface ComposeParams {
   output_dir: string;
   file_stem: string;
 }
+
+// A remix of an existing song (FMM-07): a paid job like a Compose generation. "variation" renders at once; "extend" opens the
+// edit mode, where the optional instruction is typed and Generate pressed.
+export interface RemixParams {
+  remix: { song_id: string; mode: "variation" | "extend"; instruction?: string };
+  title?: undefined;
+  format: AudioFormat;
+  output_dir: string;
+  file_stem: string;
+}
+
+export type MusicParams = ComposeParams | RemixParams;
 
 export interface Song {
   id: string;
@@ -253,26 +265,40 @@ export async function generate(page: Page, p: ComposeParams, progress: (note: st
   await generateButton.click();
   // On a brand-new /session the first Generate only created the session and rendered nothing (2026-10-22, no credits
   // spent); a second press started the take. Press again only when nothing has started 20 s later.
-  const started = async (ms: number) => {
-    const by = Date.now() + ms;
-    while (Date.now() < by) {
-      if ((await rendering(page)) || (await songIds(page)).some((id) => !before.has(id))) return true;
-      await pause(1000);
-    }
-    return false;
-  };
-  if (!(await started(20_000))) {
+  if (!(await started(page, before, 20_000))) {
     if (!(await generateButton.isEnabled().catch(() => false))) {
       const notice = await pageNotice(page);
       throw new Error(`Generate did not start and the button is disabled.${notice ? ` The page says: ${notice}` : ""}`);
     }
     progress("generating (second press)");
     await generateButton.click();
-    if (!(await started(30_000))) {
+    if (!(await started(page, before, 30_000))) {
       const notice = await pageNotice(page);
       throw new Error(`Flow Music started nothing after two presses of Generate.${notice ? ` The page says: ${notice}` : ""}`);
     }
   }
+  return collectTakes(page, before, p, progress, creditsBefore);
+}
+
+// Something has started: a render in progress, or a song link that was not there before.
+async function started(page: Page, before: Set<string>, ms: number): Promise<boolean> {
+  const by = Date.now() + ms;
+  while (Date.now() < by) {
+    if ((await rendering(page)) || (await songIds(page)).some((id) => !before.has(id))) return true;
+    await pause(1000);
+  }
+  return false;
+}
+
+// Shared by generate and remix, once a render has started: wait while anything renders (and a little longer in case a
+// second take follows), stop the playback, keep the takes that are ready, download each and read the credits again.
+async function collectTakes(
+  page: Page,
+  before: Set<string>,
+  p: { format: AudioFormat; output_dir: string; file_stem: string },
+  progress: (note: string) => void,
+  creditsBefore: number | undefined,
+): Promise<GenerateResult> {
   const session = page.url();
 
   // Wait while anything renders, then a little longer in case a second take follows the first.
@@ -319,6 +345,60 @@ export async function generate(page: Page, p: ComposeParams, progress: (note: st
   };
 }
 
+// Opens a song's own page and its menu (the unnamed button after Share), then Remix > <sub> by keyboard: a pointer moving
+// onto a submenu closes it (the same as Download, 2026-10-22). Submenu items: Start session, Cover, Replace, Extend,
+// Use prompt, Variation, Trim. Mapped 2026-10-22 (FMM-07); the code path itself is not yet verified live.
+export async function remix(page: Page, p: RemixParams, progress: (note: string) => void): Promise<GenerateResult> {
+  const { song_id: id, mode, instruction } = p.remix;
+  progress("opening the song");
+  await page.goto(songUrl(id), { waitUntil: "domcontentloaded" });
+  await requireSignedIn(page);
+  const spot = songPageMenu(page);
+  await spot.button.waitFor({ state: "visible", timeout: 15_000 });
+  // The page has just loaded, so the balance is current.
+  const creditsBefore = await readCredits(page);
+  await spot.button.click({ timeout: 10_000 });
+  const remixItem = page.getByRole("menuitem", { name: /^Remix/ }).first();
+  if (!(await remixItem.waitFor({ state: "visible", timeout: 8000 }).then(() => true, () => false))) {
+    const items = await page.locator('[role="menuitem"]').allTextContents();
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error(items.length ? `The song menu has no Remix item. It offered: ${items.map((t) => t.trim()).join(" | ")}` : "The song menu did not open.");
+  }
+  await remixItem.focus();
+  await page.keyboard.press("ArrowRight");
+  const label = mode === "variation" ? "Variation" : "Extend";
+  const item = page.getByRole("menuitem", { name: remixItemPattern(mode) }).first();
+  if (!(await item.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false))) {
+    const items = await page.locator('[role="menuitem"]').allTextContents();
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error(`The Remix menu has no ${label} item. It offered: ${items.map((t) => t.trim()).join(" | ")}`);
+  }
+  progress(mode === "variation" ? "starting the variation" : "opening the extend editor");
+  await item.focus();
+  await page.keyboard.press("Enter");
+  // Both modes open a new session (/session/<uuid>?t=true for a variation, /session?t=true for the extend editor).
+  await page.waitForURL(/\/session/, { timeout: 30_000 });
+  await requireSignedIn(page);
+
+  if (mode === "extend") {
+    const box = page.getByRole("textbox", { name: "Instruction" });
+    await box.waitFor({ state: "visible", timeout: 20_000 });
+    if (instruction) await box.fill(instruction);
+  } else {
+    // Let the new session settle so a take that is already listed is not counted as new.
+    await pause(2000);
+  }
+  // What is on the page now is not a new take: the source song may be listed in the session. A variation has already
+  // started rendering; an extend starts when Generate is pressed.
+  const before = new Set([id, ...(await songIds(page))]);
+  if (mode === "extend") {
+    progress("generating the extension");
+    await page.getByRole("button", { name: "Generate", exact: true }).click({ timeout: 10_000 });
+  }
+  if (!(await started(page, before, 30_000))) await failWithDump(page, `The ${mode} did not start.`);
+  return collectTakes(page, before, p, progress, creditsBefore);
+}
+
 // ---- Download ----
 
 const DOWNLOAD_DIR = join(HOME_DIR, "downloads");
@@ -339,7 +419,7 @@ function downloadsNow(): Set<string> {
 }
 
 // A new file in either folder whose size held still across two checks.
-async function waitForDownloadedFile(before: Set<string>, timeoutMs: number): Promise<string> {
+async function waitForDownloadedFile(before: Set<string>, timeoutMs: number, what = "download"): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let stable: { path: string; size: number } | undefined;
   while (Date.now() < deadline) {
@@ -355,7 +435,7 @@ async function waitForDownloadedFile(before: Set<string>, timeoutMs: number): Pr
       }
     }
   }
-  throw new Error("Flow Music started the download but no file arrived in the tool's folder or ~/Downloads.");
+  throw new Error(`Flow Music started the ${what} but no file arrived in the tool's folder or ~/Downloads within ${Math.round(timeoutMs / 60_000)} min.`);
 }
 
 // "allowAndName" saves under a bare id, so the type is read from the first bytes.
@@ -452,6 +532,73 @@ export async function downloadSong(page: Page, id: string, format: AudioFormat, 
   const title = ((await page.locator('main [role="textbox"]').first().innerText().catch(() => "")) ?? "").trim();
   const file = await downloadFromRow(page, format, stem, spot);
   return { id, title, url: songUrl(id), file };
+}
+
+// ---- Music video ----
+
+export interface VideoResult {
+  id: string;
+  title: string;
+  url: string;
+  template: VideoTemplate;
+  file: string;
+}
+
+// Song menu > Download > Download video opens the dialog "Pick a template to create your video" (mapped 2026-10-22);
+// clicking a template card posts POST /__api/video/clip. A first render took over 3 minutes with nothing shown, and leaving
+// the page stops it, so this stays on the song page until Chrome saves "<title>.mp4" (a repeat request returned at once).
+// Holds the download lock for the whole render: one download at a time across both sites, so the new file is ours.
+export function downloadVideo(page: Page, id: string, template: VideoTemplate, stem: string, timeoutMs: number, progress: (note: string) => void = () => {}): Promise<VideoResult> {
+  return withDownloadLock(async () => {
+    progress("opening the song");
+    await page.goto(songUrl(id), { waitUntil: "domcontentloaded" });
+    await requireSignedIn(page);
+    const spot = songPageMenu(page);
+    await spot.button.waitFor({ state: "visible", timeout: 15_000 });
+    const title = ((await page.locator('main [role="textbox"]').first().innerText().catch(() => "")) ?? "").trim();
+    await useOwnDownloadDir(page);
+    await spot.button.click({ timeout: 10_000 });
+    const download = page.getByRole("menuitem", { name: "Download", exact: true });
+    if (!(await download.waitFor({ state: "visible", timeout: 8000 }).then(() => true, () => false))) {
+      const items = await page.locator('[role="menuitem"]').allTextContents();
+      await page.keyboard.press("Escape").catch(() => {});
+      throw new Error(items.length ? `The song menu has no Download item. It offered: ${items.map((t) => t.trim()).join(" | ")}` : "The song menu did not open.");
+    }
+    await download.focus();
+    await page.keyboard.press("ArrowRight");
+    const item = page.getByRole("menuitem", { name: "Download video", exact: true });
+    await item.waitFor({ state: "visible", timeout: 5000 });
+    await item.focus();
+    await page.keyboard.press("Enter");
+
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 10_000 });
+    const { label, pattern } = videoTemplateCard(template);
+    const card = dialog.locator("div.cursor-pointer", { hasText: pattern }).first();
+    if (!(await card.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false))) {
+      const cards = await dialog.locator("div.cursor-pointer").allInnerTexts();
+      await page.keyboard.press("Escape").catch(() => {});
+      throw new Error(`The video dialog has no "${label}" card. It offered: ${cards.map((t) => t.replace(/\s+/g, " ").trim()).join(" | ") || "nothing"}`);
+    }
+    const before = downloadsNow();
+    progress(`rendering the ${label} video (a first render can take several minutes; the page stays open)`);
+    await card.click();
+    const file = await waitForDownloadedFile(before, timeoutMs, "video render");
+    const head = Buffer.alloc(12);
+    const fd = openSync(file, "r");
+    try {
+      readSync(fd, head, 0, 12, 0);
+    } finally {
+      closeSync(fd);
+    }
+    const ext = mediaExtensionOfBytes(head);
+    if (ext !== ".mp4") throw new Error(`The downloaded file is not an MP4 (starts as ${ext}); it was left at ${file}.`);
+    const target = `${stem}.mp4`;
+    mkdirSync(dirname(target), { recursive: true });
+    renameSync(file, target);
+    await page.keyboard.press("Escape").catch(() => {});
+    return { id, title, url: songUrl(id), template, file: target };
+  });
 }
 
 // ---- Library and debugging ----

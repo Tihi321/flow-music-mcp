@@ -95,8 +95,39 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
 - `music_download` from `/song/<id>` (a song not in the list): M4A (AAC 48 kHz stereo, 3:01, 3.1 MB) and MP3 (3.7 MB).
 - The song page's Details submenu: Privacy, Link only, Edit details, Go to session, Pin to profile (no BPM or seed shown).
 
+## Mapped live (2026-10-22, FMM-07; test song "FMM Test Vocal Lyrics" 7be13b39-82da-4980-9842-f42cd6fd888f)
+
+- Song menu (row "More options for <title>" or the song page's unnamed button after Share). Submenus open by keyboard
+  (focus the item, ArrowRight, focus the entry, Enter); a pointer moving onto a submenu closes it.
+  - Remix >: Start session, Cover, Replace, Extend, Use prompt, Variation, Trim. Download >: Download video, Get stems, M4A, MP3, WAV.
+    Add to >: Playlist >, Queue.
+- Download video: opens a `dialog` "Pick a template to create your video" with four cards (`div.cursor-pointer`, text only, no role):
+  "Music video" (badge NEW), "Modern", "Player", "Simple"; `Close dialog`. A card posts `POST /__api/video/clip`. The first render
+  took over 3 minutes with no UI (leaving the page stops it); a repeat request returned a `video_url` at once and Chrome began a blob
+  download "<title>.mp4". Simple cost 0 credits; the other three were not tried (cost unknown).
+- Get stems: `GET /__api/stems/clip/<id>`, then nothing (no dialog, no file; balance 13,175 -> 13,174). Probably needs "Split stems"
+  first (not clicked). Not exposed.
+- Remix > Variation: renders at once (5 credits) in a new `/session/<uuid>?t=true`: `Creating "<title> (Remix)"...`, same Sound and
+  Lyrics, a new Seed, then one take `/song/<id>` "<title> (Remix)" (~45 s).
+- Remix > Extend: opens an edit mode in a new `/session?t=true` (nothing rendered yet): `Copy playhead timestamp`, `Copy duration
+  timestamp`, `Close edit mode`, a combobox (COVER, EXTEND, REPLACE), `Settings` (dialog "Extend from" / "Extend until", defaults
+  1:01 and 2:01 for a 1:31 song), textbox `Instruction`, `Edit Lyrics`, `Generate`. Generate rendered "<title> (Extended)" in ~40 s in
+  `/session/<uuid>?t=true`; the song page says "EXTENDED FROM (1:01-2:02)" and "INSTRUCTION ...". 5 credits.
+- Tools built from this (verified live 2026-10-22, see below): `music_remix` (job on the music queue; `music.ts remix`, shares
+  `collectTakes` with `generate`), `music_video` (`downloadVideo`, holds the download lock while it renders), `music_loop`
+  (`src/loop.ts` + `loop-analysis.ts`, local ffmpeg: band-level matching around start/end candidates, crossfaded end into start,
+  checked on a sample WAV and MP3), `loop_friendly` on `music_generate` (wording hint only).
+
+## Verified live (2026-10-22, FMM-07, 10 credits)
+
+- Through the tools: `music_loop` on fmm06-advanced.wav (loop 25.5-82.0 s, seam jump 0.5 dB vs 10.5 dB
+  typical; not judged by ear yet); `music_video` simple on a rendered song (720x1280 h264 + aac, 1:34) and a fresh render
+  (FMM Test Advanced, 1:40 wall time, 1:42 video), 0 credits; `music_remix` variation (1:30, "(Remix)") and extend with an
+  instruction (2:09 from a 1:39 song, "(Extended)"), 5 credits each (13,164 -> 13,154).
+
 ## Not verified yet
 
+- Not run: the "Music video", "Modern" and "Player" video templates; Cover/Replace/Trim; stems.
 - What a failed take looks like (`songState` guesses from its text), and an out-of-credits message (a debug dump is written
   the first time one happens).
 - Lyria 3 Pro (the legacy model) in a run.

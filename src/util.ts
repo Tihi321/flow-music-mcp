@@ -76,3 +76,31 @@ export const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]
 // Model menu items read "<model> <description>" ("Lyria 3.5 Top performing, flagship model", "Lyria 3 Pro Legacy model"),
 // so match the name at the start followed by a space or the end: "Lyria 3" must not match "Lyria 3.5".
 export const modelItemPattern = (model: string): RegExp => new RegExp(`^${escapeRegExp(model.trim())}(\\s|$)`);
+
+// ---- FMM-07 ----
+
+export const LOOP_WORDING = "seamless loop, steady energy throughout, no intro, no fade-out, ends where it began";
+
+// The Sound description with the loop wording appended (a hint to the model only; the take may still fade).
+export const loopFriendlySound = (sound: string): string => {
+  const s = sound.trim().replace(/[.,;\s]+$/, "");
+  return /seamless loop/i.test(s) ? s : `${s}. ${LOOP_WORDING}`;
+};
+
+export type VideoTemplate = "simple" | "player" | "modern" | "music_video";
+
+// The cards of the "Pick a template to create your video" dialog (mapped 2026-10-22): their label, and a pattern for the
+// card's whole text (the "Music video" card also shows a NEW badge, before or after the label).
+export function videoTemplateCard(template: VideoTemplate): { label: string; pattern: RegExp } {
+  const label = { simple: "Simple", player: "Player", modern: "Modern", music_video: "Music video" }[template];
+  return { label, pattern: new RegExp(String.raw`^(NEW\s*)?` + escapeRegExp(label) + String.raw`(\s*NEW)?$`) };
+}
+
+// The Remix submenu item for a mode.
+export const remixItemPattern = (mode: "variation" | "extend"): RegExp => (mode === "variation" ? /^Variation$/ : /^Extend$/);
+
+// A song id from an id or a flowmusic.app/song/<id> link; undefined when neither.
+export function songIdOf(text: string): string | undefined {
+  const m = /(?:\/song\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(text.trim());
+  return m?.[1]?.toLowerCase();
+}

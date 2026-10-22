@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeRegExp, lengthSeconds, lengthValid, modelItemPattern, parseCredits } from "../src/util.js";
+import { LOOP_WORDING, escapeRegExp, lengthSeconds, lengthValid, loopFriendlySound, modelItemPattern, parseCredits, remixItemPattern, songIdOf, videoTemplateCard } from "../src/util.js";
 
 describe("lengthValid", () => {
   it("accepts m:ss from 1:00 to 3:00 and bare minutes", () => {
@@ -44,5 +44,33 @@ describe("modelItemPattern", () => {
   it("treats the name literally", () => {
     expect(modelItemPattern("Lyria 3.5").test("Lyria 3x5 model")).toBe(false);
     expect(escapeRegExp("a.b(c)[d]")).toBe("a\\.b\\(c\\)\\[d\\]");
+  });
+});
+
+describe("FMM-07 helpers", () => {
+  it("appends the loop wording once", () => {
+    expect(loopFriendlySound("calm piano, 80 bpm.")).toBe(`calm piano, 80 bpm. ${LOOP_WORDING}`);
+    expect(loopFriendlySound("calm piano")).toBe(`calm piano. ${LOOP_WORDING}`);
+    expect(loopFriendlySound(`calm piano. ${LOOP_WORDING}`)).toBe(`calm piano. ${LOOP_WORDING}`);
+  });
+  it("matches a video template card by its whole text", () => {
+    expect(videoTemplateCard("simple").pattern.test("Simple")).toBe(true);
+    expect(videoTemplateCard("simple").pattern.test("Simple video")).toBe(false);
+    expect(videoTemplateCard("music_video").pattern.test("Music video NEW")).toBe(true);
+    expect(videoTemplateCard("music_video").pattern.test("NEW Music video")).toBe(true);
+    expect(videoTemplateCard("music_video").pattern.test("Modern")).toBe(false);
+    expect(videoTemplateCard("modern").label).toBe("Modern");
+    expect(videoTemplateCard("player").label).toBe("Player");
+  });
+  it("matches the Remix submenu items exactly", () => {
+    expect(remixItemPattern("variation").test("Variation")).toBe(true);
+    expect(remixItemPattern("variation").test("Use prompt")).toBe(false);
+    expect(remixItemPattern("extend").test("Extend")).toBe(true);
+    expect(remixItemPattern("extend").test("Extended")).toBe(false);
+  });
+  it("reads a song id from an id or a link", () => {
+    expect(songIdOf("7be13b39-82da-4980-9842-f42cd6fd888f")).toBe("7be13b39-82da-4980-9842-f42cd6fd888f");
+    expect(songIdOf("https://www.flowmusic.app/song/7BE13B39-82DA-4980-9842-F42CD6FD888F?x=1")).toBe("7be13b39-82da-4980-9842-f42cd6fd888f");
+    expect(songIdOf("hello")).toBeUndefined();
   });
 });
