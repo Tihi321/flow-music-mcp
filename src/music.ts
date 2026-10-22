@@ -2,7 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rena
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
-import { HOME_DIR, MUSIC_URL, getMusicPage } from "./chrome.js";
+import { HOME_DIR, MUSIC_URL, getMusicPage, withDownloadLock } from "./chrome.js";
 
 // The Flow Music UI driver. Every selector here was mapped from the live page (see CLAUDE.md, "UI map"); never guess one.
 // Flow Music is driven through its Compose panel, not the Producer chat: Compose takes the sound, lyrics and title as
@@ -313,7 +313,12 @@ function extensionOf(file: string): string | undefined {
 }
 
 // The row's "More options" menu: Download > M4A | MP3 | WAV (also "Download video" and "Get stems", not used here).
-async function downloadFromRow(page: Page, id: string, format: AudioFormat, stem: string): Promise<string> {
+// One download at a time across both sites (chrome.ts withDownloadLock).
+function downloadFromRow(page: Page, id: string, format: AudioFormat, stem: string): Promise<string> {
+  return withDownloadLock(() => downloadFromRowNow(page, id, format, stem));
+}
+
+async function downloadFromRowNow(page: Page, id: string, format: AudioFormat, stem: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

@@ -64,14 +64,69 @@ export async function getBrowser(): Promise<Browser> {
   return browser;
 }
 
-// The Flow Music tab of the dedicated Chrome, opened when there is none.
-export async function getMusicPage(): Promise<Page> {
+export type Site = "flow" | "music";
+
+export const FLOW_URL = "https://flow.google.com/";
+const FLOW_HOST = /^https:\/\/flow\.google\.com\//;
+// Flow's buttons are found by their English names ("Start generation", "Download"...), so Flow has to show in English
+// whatever language the Google account uses. `hl=en` on the address does that (flow-mcp CLAUDE.md, 2026-10-13): it holds
+// through in-app navigation and only lasts until the next full page load, so every load adds it.
+export const inEnglish = (url: string): string => {
+  const u = new URL(url);
+  u.searchParams.set("hl", "en");
+  return u.toString();
+};
+
+// Reloads Flow in English when it shows another language (a page opened by hand, or a redirect without hl).
+async function ensureEnglish(page: Page): Promise<void> {
+  if (!FLOW_HOST.test(page.url())) return;
+  const lang = () => page.evaluate(() => document.documentElement.lang).catch(() => "");
+  const now = await lang();
+  if (!now || /^en\b/i.test(now)) return;
+  await page.goto(inEnglish(page.url()), { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.documentElement.lang, null, { timeout: 15_000 }).catch(() => {});
+  const after = await lang();
+  if (after && !/^en\b/i.test(after)) {
+    throw new Error(`Flow is showing in "${after}" and would not switch to English. Add ?hl=en to Flow's address in the Chrome window, or set the Google account's language to English.`);
+  }
+}
+
+// The tab of one site in the dedicated Chrome, opened when there is none. One Chrome, one tab per site.
+export async function getPage(site: Site): Promise<Page> {
   const b = await getBrowser();
   const context = b.contexts()[0];
   if (!context) throw new Error("Chrome has no browser context; close the Flow Music Chrome window and try again.");
-  const existing = context.pages().find((p) => MUSIC_HOST.test(p.url()));
-  if (existing) return existing;
+  const host = site === "flow" ? FLOW_HOST : MUSIC_HOST;
+  const existing = context.pages().find((p) => host.test(p.url()));
+  if (existing) {
+    if (site === "flow") await ensureEnglish(existing);
+    return existing;
+  }
   const page = await context.newPage();
-  await page.goto(MUSIC_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(site === "flow" ? inEnglish(FLOW_URL) : MUSIC_URL, { waitUntil: "domcontentloaded" });
+  if (site === "flow") await ensureEnglish(page);
   return page;
+}
+
+// The Flow Music tab of the dedicated Chrome, opened when there is none.
+export function getMusicPage(): Promise<Page> {
+  return getPage("music");
+}
+
+// One action at a time per site: Flow must not block Music and the other way round, but two actions on one tab would
+// click over each other. (music.ts keeps its own `withPage` chain for the music tab.)
+const chains: Record<Site, Promise<unknown>> = { flow: Promise.resolve(), music: Promise.resolve() };
+export function withSitePage<T>(site: Site, fn: (page: Page) => Promise<T>): Promise<T> {
+  const run = chains[site].then(async () => fn(await getPage(site)));
+  chains[site] = run.catch(() => {});
+  return run;
+}
+
+// Downloads of both sites share ~/.flow-music-mcp/downloads and Chrome's browser-wide download setting, and each one
+// waits for "a new file" there: never two at once, across sites too, or one site could take the other's file.
+let downloadChain: Promise<unknown> = Promise.resolve();
+export function withDownloadLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = downloadChain.then(fn);
+  downloadChain = run.catch(() => {});
+  return run;
 }
