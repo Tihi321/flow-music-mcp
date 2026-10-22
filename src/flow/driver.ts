@@ -1,5 +1,6 @@
-import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, renameSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, readdirSync, renameSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { extractZip } from "./platform.js";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { FLOW_URL, HOME_DIR, inEnglish, withDownloadLock } from "../chrome.js";
@@ -10,6 +11,9 @@ import { FLOW_URL, HOME_DIR, inEnglish, withDownloadLock } from "../chrome.js";
 // text. Every selector here was mapped from the live page: see CLAUDE.md, "Flow UI map (2026-10-22)". Never guess one.
 
 export type ImageSize = "1K" | "2K" | "4K";
+// Image tiles offer 1K/2K/4K; video tiles "270p Animated GIF", "360p Original size", "720p Upscaled" (2026-10-22). `original` and
+// `upscaled` pick the Original/Upscaled item of either kind (for images upscaled = 2K).
+export type DlSize = ImageSize | "original" | "upscaled";
 export type TileKind = "image" | "video" | "scene" | "other";
 
 export interface Tile {
@@ -99,9 +103,12 @@ export const projectRoot = (url: string): string | undefined => /^https:\/\/flow
 export async function isSignedIn(page: Page): Promise<boolean> {
   if (/accounts\.google\.com|\/about(\/|\?|$)/.test(page.url())) return false;
   await page.waitForLoadState("domcontentloaded").catch(() => {});
+  // The edit, character and trash views have no `Account details` button but still show the Google account link.
   return page
     .getByRole("button", { name: "Account details" })
-    .waitFor({ state: "visible", timeout: 12_000 })
+    .or(page.locator('a[aria-label^="Google Account"]'))
+    .first()
+    .waitFor({ state: "attached", timeout: 12_000 })
     .then(() => true, () => false);
 }
 
@@ -134,6 +141,8 @@ export async function flowState(page: Page, detailed: boolean): Promise<FlowStat
     state.hint = "Flow is not signed in. Run `yarn login` in flow-music-mcp and sign in to Google in the Chrome window that opens.";
     return state;
   }
+  // From an edit, character or trash view the account button and the project title are not on screen: go to the grid first.
+  if (root && detailed) await ensureProjectGrid(page).catch(() => {});
   if (root) {
     state.project_id = UUID.exec(root)?.[0];
     state.project_name = await page.locator('input[aria-label="Editable text"]').first().inputValue({ timeout: 3000 }).catch(() => undefined);
@@ -213,7 +222,7 @@ export async function openProject(page: Page, project: string | undefined, creat
 
 // The left "Project navigation" (All media, Images, Characters, Scenes, Library, Tools, Trash). Each item's text holds its
 // icon word and its label ("dashboard All media"), also when the menu is collapsed to icons.
-async function clickProjectNav(page: Page, item: string): Promise<boolean> {
+export async function clickProjectNav(page: Page, item: string): Promise<boolean> {
   const button = page
     .getByRole("navigation", { name: "Project navigation" })
     .locator("button, a")
@@ -258,18 +267,18 @@ const TILE_JS = `(tile) => {
   };
 }`;
 
-interface RawTile extends Tile {
+export interface RawTile extends Tile {
   error: boolean;
 }
 
-async function readTiles(page: Page): Promise<RawTile[]> {
+export async function readTiles(page: Page): Promise<RawTile[]> {
   return page.evaluate(
     (js) => [...document.querySelectorAll("flow-grid-tile-container")].map(eval(js) as (t: Element) => RawTile),
     TILE_JS,
   );
 }
 
-const tileById = (page: Page, id: string): Locator =>
+export const tileById = (page: Page, id: string): Locator =>
   page
     .locator(
       id.startsWith("title:")
@@ -336,7 +345,7 @@ export async function findTile(page: Page, id: string): Promise<Locator> {
 }
 
 // Flow reveals a tile's toolbar for a genuine pointer move only; Playwright's hover() does not trigger it.
-async function hoverTile(page: Page, tile: Locator, settleMs = 250): Promise<void> {
+export async function hoverTile(page: Page, tile: Locator, settleMs = 250): Promise<void> {
   await tile.scrollIntoViewIfNeeded();
   const box = await tile.boundingBox();
   if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -365,20 +374,20 @@ const SYSTEM_DOWNLOADS = join(homedir(), "Downloads");
 // Playwright keeps a download in a per-connection temp file another client may sweep, so Chrome itself writes into a folder
 // we own. The override is browser-wide and reset when another CDP client attaches, so it is set again before EVERY download
 // (flow-mcp, 2026-09-21: downloads were going to ~/Downloads all along).
-async function useOwnDownloadDir(page: Page): Promise<void> {
+export async function useOwnDownloadDir(page: Page): Promise<void> {
   mkdirSync(DOWNLOAD_DIR, { recursive: true });
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: DOWNLOAD_DIR, eventsEnabled: true }).catch(() => {});
 }
 
-function downloadsNow(): Set<string> {
+export function downloadsNow(): Set<string> {
   const seen = new Set<string>();
   for (const dir of [DOWNLOAD_DIR, SYSTEM_DOWNLOADS]) if (existsSync(dir)) for (const f of readdirSync(dir)) seen.add(join(dir, f));
   return seen;
 }
 
 // A new file in either folder whose size held still across two checks.
-async function waitForDownloadedFile(page: Page, before: Set<string>, timeoutMs: number): Promise<string> {
+export async function waitForDownloadedFile(page: Page, before: Set<string>, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let stable: { path: string; size: number } | undefined;
   while (Date.now() < deadline) {
@@ -417,15 +426,20 @@ export function extensionOf(file: string): string {
 }
 
 // Image download submenu (2026-10-22): "1K Original size", "2K Upscaled", "4K Upscaled".
-const SIZE_RE: Record<ImageSize, RegExp> = { "1K": /^\s*1K/, "2K": /^\s*2K/, "4K": /^\s*4K/ };
+const SIZE_RE: Record<DlSize, RegExp> = { "1K": /^\s*1K/, "2K": /^\s*2K/, "4K": /^\s*4K/, original: /Original/i, upscaled: /Upscaled/i };
 
 // More options -> Download (the submenu opens on hover) -> a size. Returns the saved file path (extension by magic bytes).
 // One download at a time across both sites (chrome.ts withDownloadLock).
-export function downloadTile(page: Page, resolve: () => Promise<Locator>, stem: string, size: ImageSize): Promise<string> {
+export async function downloadTile(page: Page, resolve: () => Promise<Locator>, stem: string, size: DlSize): Promise<string> {
+  return (await downloadTileAll(page, resolve, stem, size))[0]!;
+}
+
+// A tile holding several takes (made at x2-x4) can come down as a ZIP: it is unpacked into <stem>, <stem>-v2, ... (flow-mcp).
+export function downloadTileAll(page: Page, resolve: () => Promise<Locator>, stem: string, size: DlSize): Promise<string[]> {
   return withDownloadLock(() => downloadTileNow(page, resolve, stem, size));
 }
 
-async function downloadTileNow(page: Page, resolve: () => Promise<Locator>, stem: string, size: ImageSize): Promise<string> {
+async function downloadTileNow(page: Page, resolve: () => Promise<Locator>, stem: string, size: DlSize): Promise<string[]> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -458,13 +472,27 @@ async function downloadTileNow(page: Page, resolve: () => Promise<Locator>, stem
         await page.keyboard.press("Enter");
       });
       // Upscales render on demand and can take minutes.
-      const file = await waitForDownloadedFile(page, before, size === "1K" ? 120_000 : 600_000);
-      const target = `${stem}${extensionOf(file)}`;
-      mkdirSync(join(target, ".."), { recursive: true });
-      renameSync(file, target);
+      const file = await waitForDownloadedFile(page, before, size === "1K" || size === "original" ? 180_000 : 600_000);
+      mkdirSync(join(stem, ".."), { recursive: true });
+      let saved: string[];
+      if (extensionOf(file) === ".zip") {
+        const work = mkdtempSync(join(tmpdir(), "flow-takes-"));
+        const takes = extractZip(file, work).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        saved = takes.map((t, i) => {
+          const dest = `${stem}${i ? `-v${i + 1}` : ""}${extensionOf(t)}`;
+          renameSync(t, dest);
+          return dest;
+        });
+        renameSync(file, `${stem}-takes.zip`);
+        if (!saved.length) throw new Error("Flow sent a ZIP with nothing usable inside it.");
+      } else {
+        const target = `${stem}${extensionOf(file)}`;
+        renameSync(file, target);
+        saved = [target];
+      }
       await page.keyboard.press("Escape").catch(() => {});
       await clearBackdrops(page);
-      return target;
+      return saved;
     } catch (err) {
       lastError = err;
       await page.keyboard.press("Escape").catch(() => {});
@@ -476,9 +504,15 @@ async function downloadTileNow(page: Page, resolve: () => Promise<Locator>, stem
 }
 
 // Re-finds the tile on every attempt: the virtual grid may have unmounted it between steps.
-export const tileResolver = (page: Page, id: string) => async (): Promise<Locator> => {
+// A finished video's thumbnail is re-signed (/asb/ URL without the uuid) a little after it lands, so a video tile is also found
+// by its title (the newest tile with that title, which is the first in the grid) when its id no longer resolves.
+export const tileResolver = (page: Page, id: string, title?: string) => async (): Promise<Locator> => {
   const tile = tileById(page, id);
   if (await tile.count()) return tile;
+  if (title) {
+    const byTitle = page.locator(`flow-grid-tile-container[aria-label="${title.replace(/"/g, '\\"')}"]`).first();
+    if (await byTitle.count()) return byTitle;
+  }
   return findTile(page, id);
 };
 

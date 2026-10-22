@@ -9,8 +9,10 @@ export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 export type Aspect = "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
 
 export interface FlowJobParams {
-  kind: "images";
-  // One agent request: every scene of the job. flow_generate makes one job per scene, flow_agent_images one job for all.
+  // images: one agent request for all scenes (flow_agent_images); scene: one generation in the direct composer
+  // (flow_generate, flow_narrate engine flow); continue: flow_continue; edit_video: flow_edit on a video.
+  kind: "images" | "scene" | "continue" | "edit_video";
+  // For "images": every scene of the job. Other kinds carry one prompt in scenes[0].
   scenes: string[];
   // The number each scene is saved as (scene-03.jpeg), same length as scenes.
   numbers: number[];
@@ -20,6 +22,26 @@ export interface FlowJobParams {
   variants: number;
   model?: string;
   size: ImageSize;
+  // scene
+  type?: "image" | "video";
+  duration?: number;
+  resolution?: "360p" | "720p";
+  first_frame?: string;
+  last_frame?: string;
+  reference_images?: string[];
+  // The previous scene's job: its last frame becomes this scene's first frame / its image a reference (flow-mcp).
+  chain_from?: string;
+  reference_from?: string;
+  voice?: string;
+  voice_image?: string;
+  // flow_narrate engine flow: where the take's sound is saved as .m4a once the take is downloaded.
+  audio_target?: string;
+  retries?: number;
+  download_quality?: "original" | "upscaled";
+  // continue / edit_video: the video to continue or edit (media id or title); characters to keep; I2V "exact" or R2V "likeness"
+  asset?: string;
+  attach?: string[];
+  mode?: "exact" | "likeness";
   max_credits: number;
   output_dir: string;
   file_stem: string;
@@ -45,6 +67,9 @@ export interface FlowJob {
   progress?: string;
   note?: string;
   error?: string;
+  // Credits the composer quoted before starting, and the balance change measured around the job.
+  credits_quote?: number;
+  credits_spent?: number;
   attempts: number;
   cancelRequested?: boolean;
   createdAt: string;
@@ -56,6 +81,8 @@ export interface JobOutcome {
   failed: number[];
   note?: string;
   project?: { id: string; name: string };
+  credits_quote?: number;
+  credits_spent?: number;
 }
 
 export type JobRunner = (job: FlowJob) => Promise<JobOutcome>;
@@ -143,6 +170,8 @@ export class FlowJobQueue {
           job.failed_scenes = out.failed;
           job.note = out.note;
           job.project = out.project ?? job.project;
+          job.credits_quote = out.credits_quote;
+          job.credits_spent = out.credits_spent;
           job.status = job.cancelRequested ? "cancelled" : "done";
           job.error = undefined;
         } catch (err) {

@@ -1,5 +1,37 @@
 # FMM-02 changelog
 
+## 2026-10-22: phases 5-7, characters, edits, video, Flow voices; hub switched to flow-music-mcp
+
+Summary: flow-music-mcp now has 32 tools, all 20 of flow-mcp's plus `flow_inspect`, `flow_set_key` and `flow_speech_setup`, rebuilt for Flow's redesign. Single shots and videos go through Flow's direct composer (exact prompt, live credit quote checked against `max_credits` before Start); image sets go through the agent. The hub no longer uses flow-mcp.
+
+**Repositories:** flow-music-mcp `FMM-02_flow-tools`; creative-hub `FMM-02_hub-flow-in-one-mcp` (ef2ea6b, from origin/master). Phases 5-6 by implementer A; it stopped before sending a final report, so the orchestrator reviewed its uncommitted work and its CLAUDE.md notes and re-ran the checks below.
+
+### Files changed (flow-music-mcp)
+- `src/flow/direct.ts` (new): the direct composer (agent panel closed, Agent pill off): Image/Video, Frames/Ingredients, aspect, model family, 360p/720p and 4-10 s (Omni), x1-x4, live quote read before Start; Start/End frame pickers; ingredient picker by title.
+- `src/flow/video.ts` (new): video generation, video tiles (pending → thumbnail; settled tiles have no media id, so they are re-found by title), video download (270p GIF / 360p original / 720p upscaled), `flow_continue` (Save frame → Animate as the start frame), video `flow_edit` in the edit view (no quote: cost measured from the balance).
+- `src/flow/characters.ts` (new): create from a description or project media, name, stock voice, personality, portrait download, list, edit.
+- `src/flow/chain.ts` (new): last frame of a clip (ffmpeg), for chain_from / reference_from.
+- `src/flow/tools.ts`: `flow_generate` takes type video|image, duration, resolution, model, aspect_ratio, variants, first_frame / last_frame, reference_images, chain_from / reference_from, retries, download_quality, max_credits; new `flow_continue`, `flow_edit`, `flow_characters`, `flow_character`, `flow_character_edit`.
+- `src/flow/driver.ts`, `queue.ts`: video tile ids and resolvers, cancelling the rights dialog, onboarding card, job params.
+- `src/flow/local-tools.ts`: `flow_narrate` engine `flow` (a 360p take with a Flow voice; audio extracted).
+- `src/mcp/server.ts`: instructions. `CLAUDE.md`: "Direct composer, video, characters, edits" map.
+
+### Deviations
+- `flow_edit` for video uses the edit view, not the agent: the agent's video edit failed 3 times during a "high demand" banner (nothing charged).
+- Local-file uploads stop at Flow's rights dialog (cancelled on purpose); `asset:<media_id>` references work. Decision for the user (plan "Open").
+
+### Verification
+- `yarn build` clean. `hub.ps1 check flow-music-mcp`: 32 tools. `flow_status`: PRO, 1,010 credits (1,050 before phases 5-6).
+- Paid, per implementer A's notes (balance checked): mapping text-to-video 4, `flow_generate` text-to-video 4, first+last frame 4, `flow_continue` 4, video edit by hand 10 and through `flow_edit` 10, `flow_narrate` engine flow 4 = 40. A quote of 4 against max_credits 1 was refused with nothing spent.
+- Files (ffprobe): vid-t2v-01, vid-frames-01, continue-01, vedit-01, narration-flow-take-01, dl-video: all h264 640x360 + aac, about 4 s. Frames checked by the orchestrator: text-to-video paper boat, and the edit adds falling snow. The Flow-voice narration was transcribed back exactly by whisper (per A).
+- Free: character "Kai" created with voice and personality, `flow_characters` lists Kai and Mara (re-checked), character edit (green hat, viewed by A), image edit (a seagull added), previous-scene reference images, agent image batch after the changes (regression).
+
+### Not run
+- Local-file first/last frames and references, chain_previous (rights dialog); likeness mode of `flow_continue`; 720p / Veo models; 4K image download; a failed direct-composer tile.
+
+### Commit status
+Committed on `FMM-02_flow-tools` (this entry's commit), not pushed. Hub branch committed (ef2ea6b), not pushed.
+
 ## 2026-10-22: phases 1-4, Flow image tools and local tools in flow-music-mcp
 
 Summary: flow-music-mcp now serves 27 tools: 9 Flow Music, 10 Flow (images through Flow's agent, assets, downloads, trash), and 8 local ones (voices, narration, key, assembly, transcription, captions, speech setup, techniques). One Chrome profile serves both sites. Keys and settings can come from `.env`. Video, characters, edits and the hub are still to do (phases 5-7).

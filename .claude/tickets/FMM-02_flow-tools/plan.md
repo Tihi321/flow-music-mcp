@@ -60,9 +60,9 @@ flow-mcp's Studio web panel (port 8787) is not part of this plan; see "Open".
 - [x] Phase 2: core image tools, verified live (free; credits stayed 1,050).
 - [x] Phase 3: voices (gemini, windows) and keys (.env, key files, flow_set_key), verified (flow_set_key itself not run, on purpose).
 - [x] Phase 4: assemble, transcribe, captions (own whisper.cpp, flow_speech_setup), techniques, verified.
-- [ ] Phase 5: characters and image edits.
-- [ ] Phase 6: video (paid, smallest settings), references and first/last frames.
-- [ ] Phase 7: hub.
+- [x] Phase 5: characters (create, list, edit) and image edits, verified live (free).
+- [x] Phase 6: direct composer with the live quote, video (text-to-video, first+last frame, continue, video edit), Flow-voice narration, previous-scene references, video download; verified live. 40 of the 60-credit test cap spent (balance 1,050 -> 1,010, re-checked by the orchestrator). Open: local-file uploads (first_frame / last_frame / reference_images from a file, chain_previous) stop at Flow's "Rights to use this image" dialog, which the driver cancels: that declaration is the user's (see Open below); `asset:<media_id>` references work.
+- [x] Phase 7: hub (creative-hub branch `FMM-02_hub-flow-in-one-mcp`): flow-mcp removed from .mcp.json and services.json, README, skill, ROADMAP.
 
 **Finding that changes phase 6 (implementer A):** Flow still has the old direct composer: `Close` in the agent panel collapses to a bottom composer whose `Agent` pill, when off, shows `Settings trigger`, Image/Video, `Select model family`, x1-x4 and a live quote ("Generating will use 0 credits"). Decision (orchestrator, following flow-mcp's own split): `flow_generate` moves to the direct composer in phase 6 (exact prompt, the quote checked against `max_credits` BEFORE anything is spent, Frames mode for first/last frame); `flow_agent_images` stays on the agent. Map the direct composer before coding.
 
@@ -96,6 +96,10 @@ Each phase ends with `yarn build`, an MCP call through `hub.ps1 call flow-music-
 - Windows voices (System.Speech): Microsoft David Desktop, Microsoft Zira Desktop (en-US).
 - **.env (user, 2026-10-22: a way to add keys by hand, without a model):** `src/env.ts` loads `<repo>/.env`, then `~/.flow-music-mcp/.env`, with Node's `process.loadEnvFile` (a real environment variable wins, then the first file). `.env.example` lists every setting; `.env` is in `.gitignore`. keys.ts imports env.ts; **index.ts must import "./env.js" first** (added after implementer A finishes, since A owns index.ts). Verified with fake keys in a temp home: the .env key is found (last4 only), and a real env var wins.
 - **API keys (user asked where they go):** Gemini key lookup order: env `GEMINI_API_KEY` → `~/.flow-music-mcp/gemini-key` → `~/.flow-mcp/gemini-key` (already holds the user's key). Tool `flow_set_key {key}` writes `~/.flow-music-mcp/gemini-key`. Never print, log or return a key (at most its last 4 characters).
+
+## Open (for the user)
+
+- **Upload rights.** Flow asks "Rights to use this image" (`I agree` / `Cancel`, links to its Prohibited Use Policy) before it takes a local image. The driver never clicks `I agree` by itself. Option: an opt-in setting the user writes in `.env` (e.g. `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree`) that makes the driver agree for files the user passes; until then such uploads are done once by hand in the Flow window.
 
 ## Decisions (user, 2026-10-22)
 
