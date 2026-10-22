@@ -209,6 +209,13 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
   position (`locateNew` in pure.ts), and a download whose tile title differs from the expected one fails instead.
 - Not run: a local `last_frame`, the 4K image download.
 
+### FMM-10: local tools verified (2026-10-22, free)
+
+- `flow_assemble`: music bed + two timed `voice_lines` (whisper heard both in order; peak -3 dB), and `dir` + `out` (clips read from one folder, film written to the other).
+- `flow_set_key`: too short, placeholder and a well-formed key Google refuses are all rejected; no key file written.
+- Gemini TTS speaks English, Croatian, German and Spanish (the language follows the text). The free tier refused the 5th request within a minute (429); the error now says to wait a minute.
+- Multilingual whisper (`ggml-large-v3-turbo-q5_0.bin`, 574 MB, plus the 60 MB detector): German and Spanish transcribe word for word; Croatian with `language: "hr"` gives Latin text (one letter off), but auto-detect said "uk" and wrote Cyrillic, so `flow_transcribe` adds a note then. Croatian captions (`hr`, now in `CAPTION_LANGUAGES`) render with diacritics.
+
 ### FMM-08: video identity, trouble, cancel (2026-10-22)
 
 - Mapped read-only: a settled video tile has no uuid anywhere; its thumbnail is `img[alt="Generated video thumbnail"]` with `src="https://flow.google.com/asb/<token>"`, and on a real pointer hover the img becomes a `<video>` whose src is the same token plus more characters. The thumbnail URL was the same before and after a page reload (5 tiles); how long it lasts is unknown.

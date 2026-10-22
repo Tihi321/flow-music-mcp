@@ -115,7 +115,7 @@ export const CAPTION_LANGUAGES = [
   ["he", "עברית"], ["fa", "فارسی"], ["hi", "हिन्दी"], ["ur", "اردو"], ["bn", "বাংলা"], ["ta", "தமிழ்"], ["id", "Bahasa Indonesia"],
   ["ms", "Bahasa Melayu"], ["tl", "Filipino"], ["vi", "Tiếng Việt"], ["th", "ไทย"], ["ja", "日本語"], ["zh", "中文"], ["yue", "粵語"],
   ["ko", "한국어"], ["sv", "Svenska"], ["da", "Dansk"], ["no", "Norsk"], ["fi", "Suomi"], ["el", "Ελληνικά"], ["cs", "Čeština"],
-  ["ro", "Română"], ["hu", "Magyar"], ["ca", "Català"], ["sw", "Kiswahili"],
+  ["ro", "Română"], ["hu", "Magyar"], ["ca", "Català"], ["sw", "Kiswahili"], ["hr", "Hrvatski"],
 ].map(([code, name]) => ({ code, name }));
 // Written without spaces between words: whisper's tokens are then pieces of words, so words come from the language's
 // own word breaker, and they are drawn side by side with no space between them.

@@ -57,6 +57,10 @@ export async function speakWithGemini(text: string, voice: string, target: strin
     }),
   });
   const body = (await res.json()) as { error?: { message?: string }; candidates?: { content?: { parts?: TtsPart[] } }[] };
+  if (res.status === 429) {
+    // Seen live: the 5th quick call in a row on the free tier; a retry a minute later worked.
+    throw new Error(`Gemini TTS free tier allows only a few requests per minute: wait about a minute and retry. Google says: ${body.error?.message ?? "no detail"}`);
+  }
   if (!res.ok) throw new Error(`Gemini TTS refused this take (${res.status}): ${body.error?.message ?? "no detail"}`);
   const part = body.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
   if (!part?.inlineData?.data) throw new Error("Gemini returned no audio for this line.");

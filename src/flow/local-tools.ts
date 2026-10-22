@@ -6,6 +6,7 @@ import type { Tool } from "../mcp/tools.js";
 import { assemble, voiceTrack } from "./assemble.js";
 import { burnCaptions, captionedName, captionSetup, prepareSpeech, transcribe } from "./captions.js";
 import { GEMINI_VOICES, speakWithGemini } from "./gemini.js";
+import { languageNote } from "./language-note.js";
 import { keyStatus, setGeminiKey } from "./keys.js";
 import { capOf } from "./limits.js";
 import { TECHNIQUES } from "./techniques.js";
@@ -52,7 +53,7 @@ const captionFields = {
     .string()
     .default("auto")
     .describe(
-      "Spoken language as a code: en, es, fr, de, pt, tr, ja, zh, ar... Pass it whenever you know it. auto detects it (a 60 MB detector downloads once). English uses a 148 MB model; every other language a 574 MB one, each downloaded the first time.",
+      "Spoken language as a code: en, es, fr, de, pt, tr, ja, zh, ar... Pass it whenever you know it, always for Croatian/Serbian/Bosnian and other close languages: auto can pick a neighbour (seen: Croatian detected as Ukrainian, in Cyrillic). auto detects it (a 60 MB detector downloads once). English uses a 148 MB model; every other language a 574 MB one, each downloaded the first time.",
     ),
 };
 
@@ -89,7 +90,7 @@ export function buildLocalFlowTools(): Tool[] {
     ),
     def(
       "flow_narrate",
-      "Record narration as an .m4a, free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and cap nothing. flow_assemble can lay the result over a film.",
+      "Record narration as an .m4a, free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'; the language follows the text, checked with English, Croatian, German and Spanish; the free tier allows only a few requests per minute, so wait about a minute after a 429); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and cap nothing. flow_assemble can lay the result over a film.",
       z.object({
         out: outDir,
         name: z.string().optional().describe("File name stem (default narration-001, -002, ...)"),
@@ -168,7 +169,7 @@ export function buildLocalFlowTools(): Tool[] {
       "Transcribe a video or audio file on this computer with every word's start and end time (whisper.cpp, local and free, about 100 languages; pass `language` when you know it). The first call installs whisper.cpp (about 15 MB, from its GitHub releases) into ~/.flow-music-mcp/whisper, and downloads a speech model once: 148 MB for English, 574 MB for any other language (flow_speech_setup does this up front). Use the times to check a take said the right words and to cut lines out of it for flow_assemble's voice_lines.",
       z.object({
         video: abs("Absolute path of a video or audio file on this computer."),
-        language: z.string().default("auto").describe("Spoken language code (en, es, tr, ja...) or auto. Pass it whenever you know it."),
+        language: z.string().default("auto").describe("Spoken language code (en, es, hr, tr, ja...) or auto. Pass it whenever you know it, always for Croatian/Serbian/Bosnian and other close languages: auto can pick a neighbour (seen: Croatian detected as Ukrainian, in Cyrillic)."),
         words: z.boolean().default(true).describe("Include every word with its start and end time in seconds."),
       }),
       async (a) => {
@@ -178,6 +179,7 @@ export function buildLocalFlowTools(): Tool[] {
           word_count: t.words.length,
           language: t.language,
           model: t.model,
+          ...(languageNote(a.language, t.language) ? { note: languageNote(a.language, t.language) } : {}),
           ...(a.words ? { words: t.words.map((w) => ({ text: w.text, start: Number(w.start.toFixed(2)), end: Number(w.end.toFixed(2)) })) } : {}),
         };
       },

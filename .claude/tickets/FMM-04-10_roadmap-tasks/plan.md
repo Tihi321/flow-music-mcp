@@ -140,3 +140,15 @@ Mapping is free; generating is not.
 - FMM-08: high-demand and cancel paths checked against live pages where they can be provoked for free (cancel on a
   free image job); others by unit tests and a note in ROADMAP.
 - FMM-10: each local tool run with real inputs, output checked by ear/ffprobe/whisper.
+
+## Progress (2026-10-22)
+
+Each ticket is a branch stacked on the previous one, pushed to origin (PRs to open by hand: no `gh` CLI here).
+
+- [x] FMM-04_unit-tests: vitest, pure helpers; 56 tests.
+- [x] FMM-05_jobs-and-recovery: jobs.json persistence, closed-window errors, one page lock per site; verified live (free).
+- [x] FMM-06_music-vocals-advanced: vocals, Advanced (BPM/Length/Seed/Model), credits, song page; 3 paid songs (15 credits).
+- [x] FMM-07_music-extras: music_loop, music_video, music_remix, loop_friendly; concurrency left out (user); 20 credits.
+- [x] FMM-08_flow-robustness: asb video handles, trouble messages, cancel, failed tiles, re-ask rule; verified live (free).
+- [x] FMM-09_flow-live-checks: local frame, chain, 720p, Veo Lite, likeness (33 Flow credits); 3 bugs fixed.
+- [x] FMM-10_local-tools: assembly, key checks, Gemini languages, multilingual whisper and Croatian captions verified (free).

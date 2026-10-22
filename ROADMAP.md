@@ -48,10 +48,10 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 
 ## Local tools
 
-- `flow_assemble` with background music and with several `voice_lines` is not run; neither is the `dir` + `out` combination.
-- `flow_set_key` has never run: the key came from `.env`.
-- Captions and transcription in other languages need the 574 MB model (not downloaded), and are not tried. Check Croatian.
-- Gemini TTS: check which languages work, Croatian in particular. Windows voices: only Microsoft David and Zira (en-US) are installed. Installing more is the user's choice, in Windows settings.
+- ~~`flow_assemble` with music, several `voice_lines`, `dir` + `out`~~: verified in FMM-10 (music bed mixed under two timed lines, heard in order by whisper, peak -3 dB; clips read from `dir`, film written to `out`).
+- `flow_set_key`: the rejection paths are verified (FMM-10: too short, placeholder, a well-formed key Google refuses; no file written). Saving a real key through the tool is not run (the key comes from `.env`).
+- ~~Captions and transcription in other languages~~: FMM-10 downloaded the 574 MB model; Croatian, German and Spanish lines transcribe correctly and Croatian captions render with diacritics. Pass the language for Croatian: auto-detect called it Ukrainian and wrote Cyrillic.
+- ~~Gemini TTS languages~~: English, Croatian, German and Spanish work (FMM-10). The free tier refused the 5th request in a minute (429); a retry a minute later worked. Windows voices: only Microsoft David and Zira (en-US) are installed. Installing more is the user's choice, in Windows settings.
 
 ## Robustness
 
