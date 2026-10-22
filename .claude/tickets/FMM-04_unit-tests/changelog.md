@@ -35,4 +35,4 @@ None. (`alignText` overlaps a zero-length gap by its 0.05 s minimum step, by des
 
 ### Commit status
 
-Committed on `FMM-04_unit-tests`, PR opened (see the PR link in the session).
+Committed and pushed on `FMM-04_unit-tests`. PR not opened from here (no `gh` CLI): https://github.com/Tihi321/flow-music-mcp/compare/master...FMM-04_unit-tests
