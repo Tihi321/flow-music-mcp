@@ -51,6 +51,8 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 - ~~`flow_assemble` with music, several `voice_lines`, `dir` + `out`~~: verified in FMM-10 (music bed mixed under two timed lines, heard in order by whisper, peak -3 dB; clips read from `dir`, film written to `out`).
 - `flow_set_key`: the rejection paths are verified (FMM-10: too short, placeholder, a well-formed key Google refuses; no file written). Saving a real key through the tool is not run (the key comes from `.env`).
 - ~~Captions and transcription in other languages~~: FMM-10 downloaded the 574 MB model; Croatian, German and Spanish lines transcribe correctly and Croatian captions render with diacritics. Pass the language for Croatian: auto-detect called it Ukrainian and wrote Cyrillic.
+- ~~Assembly timeline for screenplays~~ (FMM-12): `flow_assemble` takes stills (`{image, seconds, zoom}`), trimmed clips (`{file, from, to}`), `music_cues` with fades and `duck`; the result lists `timeline`. Verified with synthetic media (ffprobe + band levels per cue). Not run: with real Flow clips, by ear.
+- ~~Voices for VN Studio~~ (FMM-11): `flow_narrate` `format` (mp3/wav/ogg/m4a), text up to 4000 characters for gemini and windows (flow stays 400), `flow_voices` with cultures, Gemini genders and the model, default model `gemini-3.8-flash-tts` (English and Croatian lines made live as mp3). Croatian by ear and Windows voices for other cultures are not checked.
 - ~~Gemini TTS languages~~: English, Croatian, German and Spanish work (FMM-10). The free tier refused the 5th request in a minute (429); a retry a minute later worked. Windows voices: only Microsoft David and Zira (en-US) are installed. Installing more is the user's choice, in Windows settings.
 
 ## Robustness
@@ -67,4 +69,4 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 
 - **Studio web panel** (user, 2026-10-22: "tools now, panel later"): a local page like flow-mcp's (Cast, Frames, Shots, Voice, Restyle, Cut, Captions, Library) on the same core, as its own ticket.
 - **VN Studio as a client.** VN Studio could use Flow images, Flow Music songs and the voices directly as providers (`art.provider: flow` and so on) instead of `vno_asset_replace` by hand. The VN Studio side is in the hub's ROADMAP; this repo may need a small HTTP API or nothing beyond MCP.
-- **Screenplay → video.** The hub plans a Scriptorium screenplay writer. A screenplay would become Flow shots (`flow_generate` with scenes, `chain_previous`), narration, music and `flow_assemble`.
+- **Screenplay → video** (hub ticket HUB-11, `creative-hub/.claude/tickets/HUB-11-screenplay-to-video/plan.md`; the assembly part is done in FMM-12). The hub plans a Scriptorium screenplay writer. A screenplay would become Flow shots (`flow_generate` with scenes, `chain_previous`), narration, music and `flow_assemble`.

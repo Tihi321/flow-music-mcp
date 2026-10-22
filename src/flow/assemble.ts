@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
 import { FFMPEG_HINT } from "./platform.js";
+import { type ClipSpec, type MusicCue, type PlacedClip, buildGraph, isStill, planCue, specFile, timelineOf, trimmedSeconds, zoomScale } from "./timeline-pure.js";
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FLOW_MUSIC_MCP_FFMPEG ?? "ffmpeg";
@@ -13,8 +14,10 @@ const FFPROBE = process.env.FLOW_MUSIC_MCP_FFPROBE ?? "ffprobe";
 
 export interface AssembleOptions {
   dir: string;
-  clips?: string[];
+  clips?: ClipSpec[];
   music?: string;
+  music_cues?: MusicCue[];
+  duck?: boolean;
   music_volume: number;
   clip_volume?: number;
   voiceover?: string;
@@ -29,10 +32,10 @@ interface ClipInfo {
   hasAudio: boolean;
 }
 
-async function probe(file: string): Promise<ClipInfo> {
+async function probe(file: string, still = false): Promise<ClipInfo> {
   // A raw ffprobe dump ("moov atom not found") told the user nothing. Say which file and what to do about it.
   const { stdout } = await run(FFPROBE, ["-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration", "-of", "json", file]).catch(() => {
-    throw new Error(`"${basename(file)}" isn't a playable video - it may be an unfinished download or a ZIP of several clips. Remove it, or pick other clips.`);
+    throw new Error(`"${basename(file)}" isn't a playable video or picture - it may be an unfinished download or a ZIP of several clips. Remove it, or pick other clips.`);
   });
   const data = JSON.parse(stdout) as { streams: { codec_type: string; width?: number; height?: number }[]; format: { duration: string } };
   const video = data.streams.find((s) => s.codec_type === "video");
@@ -40,8 +43,8 @@ async function probe(file: string): Promise<ClipInfo> {
   return {
     width: video.width,
     height: video.height,
-    duration: Number(data.format.duration),
-    hasAudio: data.streams.some((s) => s.codec_type === "audio"),
+    duration: still ? 0 : Number(data.format.duration),
+    hasAudio: !still && data.streams.some((s) => s.codec_type === "audio"),
   };
 }
 
@@ -146,71 +149,76 @@ export async function voiceTrack(lines: VoiceLine[], out: string): Promise<{ fil
   }
 }
 
-// Joins the scene clips into one film, keeping their own sound and laying music / voiceover on top.
-export async function assemble(o: AssembleOptions): Promise<{ output: string; clips: string[]; duration: number; held_last_frame: number }> {
+export interface AssembledFilm {
+  output: string;
+  clips: string[];
+  duration: number;
+  held_last_frame: number;
+  timeline: { index: number; file: string; at: number; seconds: number }[];
+  music_cues?: { file: string; at: number; seconds: number; volume: number; fade_in: number; fade_out: number }[];
+}
+
+// Joins the clips (videos, trimmed videos and held stills) into one film, keeping their own sound and laying music cues /
+// voiceover on top.
+export async function assemble(o: AssembleOptions): Promise<AssembledFilm> {
   // Clips can now come from anywhere, so the project folder the film is saved into may not exist yet.
   if (o.clips?.length) mkdirSync(o.dir, { recursive: true });
   const out = join(o.dir, o.output_name.replace(/[^\w.-]+/g, "_").replace(/(\.mp4)?$/, ".mp4"));
-  const clips = (o.clips?.length ? o.clips : defaultClips(o.dir)).filter((c) => c !== out);
-  if (!clips.length) throw new Error(`No clips found in ${o.dir}. Generate or download a clip first, or pass clips explicitly.`);
-  for (const f of [...clips, o.music, o.voiceover]) if (f && !existsSync(f)) throw new Error(`File not found: ${f}`);
+  const specs: ClipSpec[] = (o.clips?.length ? o.clips : defaultClips(o.dir)).filter((c) => c !== out);
+  if (!specs.length) throw new Error(`No clips found in ${o.dir}. Generate or download a clip first, or pass clips explicitly.`);
+  const cueSpecs: MusicCue[] = o.music_cues?.length ? o.music_cues : o.music ? [{ file: o.music, at: 0, fade_in: 0, fade_out: 0, volume: o.music_volume }] : [];
+  for (const f of [...specs.map(specFile), ...cueSpecs.map((c) => c.file), o.voiceover]) if (f && !existsSync(f)) throw new Error(`File not found: ${f}`);
 
-  let infos = await Promise.all(clips.map(probe));
+  const infos = await Promise.all(specs.map((c) => probe(specFile(c), isStill(c))));
+  const placed: PlacedClip[] = specs.map((c, i) => {
+    const info = infos[i]!;
+    if (isStill(c)) {
+      if (!(c.seconds > 0)) throw new Error(`Clip ${i + 1}: a still needs seconds above 0.`);
+      return { kind: "still", file: c.image, from: 0, seconds: c.seconds, hasAudio: false, zoom: zoomScale(c.zoom) };
+    }
+    const file = specFile(c);
+    const trim = typeof c === "string" ? {} : c;
+    const t = trimmedSeconds(trim, info.duration, `Clip ${i + 1} (${basename(file)})`);
+    return { kind: "video", file, from: t.from, seconds: t.seconds, hasAudio: info.hasAudio, zoom: 1 };
+  });
+  const footage = placed.reduce((sum, c) => sum + c.seconds, 0);
   // A narration longer than the footage would be cut off, so the last frame is held until the voice finishes.
   let hold = 0;
   if (o.hold_last_frame !== false && o.voiceover) {
     const { stdout } = await run(FFPROBE, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", o.voiceover]);
-    hold = Math.max(0, Number(stdout.trim()) + 0.6 - infos.reduce((sum, i) => sum + i.duration, 0));
+    hold = Math.max(0, Number(stdout.trim()) + 0.6 - footage);
   }
-  // Size the film to the biggest clip so a 720p opener cannot pull a 1080p clip down with it.
-  const { width, height } = infos.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
-  const args: string[] = ["-y"];
-  for (const clip of clips) args.push("-i", clip);
-  const filters: string[] = [];
+  // Size the film to the biggest clip so a 720p opener cannot pull a 1080p clip down with it. Even numbers for x264.
+  const big = infos.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
+  const width = big.width - (big.width % 2);
+  const height = big.height - (big.height % 2);
+  const filmSeconds = footage + hold;
+  const cues = cueSpecs.map((c, k) => planCue(c, filmSeconds, o.music_volume, `music_cues[${k}]`));
   // The clips' own sound used to play at full volume no matter what, drowning a narration laid on top. Music already
   // had its own level; the clips now do too.
   const clipVolume = Math.min(1, Math.max(0, o.clip_volume ?? 1));
-  infos.forEach((info, i) => {
-    const freeze = hold > 0.05 && i === infos.length - 1 ? `,tpad=stop_mode=clone:stop_duration=${hold.toFixed(2)}` : "";
-    filters.push(
-      `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24${freeze}[v${i}]`,
-    );
-    filters.push(
-      info.hasAudio
-        ? `[${i}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${clipVolume}${hold > 0.05 && i === infos.length - 1 ? `,apad=pad_dur=${hold.toFixed(2)}` : ""}[a${i}]`
-        : `anullsrc=r=48000:cl=stereo,atrim=duration=${(info.duration + (i === infos.length - 1 ? hold : 0)).toFixed(2)}[a${i}]`,
-    );
-  });
-  filters.push(`${infos.map((_, i) => `[v${i}][a${i}]`).join("")}concat=n=${clips.length}:v=1:a=1[v][clipaudio]`);
+  const graph = buildGraph({ clips: placed, width, height, clipVolume, hold, cues, voiceover: o.voiceover, duck: o.duck === true });
 
-  const mix = ["[clipaudio]"];
-  let input = clips.length;
-  if (o.music) {
-    args.push("-stream_loop", "-1", "-i", o.music);
-    filters.push(`[${input}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${o.music_volume}[music]`);
-    mix.push("[music]");
-    input++;
-  }
-  if (o.voiceover) {
-    args.push("-i", o.voiceover);
-    filters.push(`[${input}:a]aresample=48000,aformat=channel_layouts=stereo[vo]`);
-    mix.push("[vo]");
-  }
-  filters.push(mix.length > 1 ? `${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0[a]` : "[clipaudio]anull[a]");
-
-  const output = out;
-  args.push(
-    "-filter_complex", filters.join(";"),
+  const args = [
+    "-y", ...graph.inputArgs,
+    "-filter_complex", graph.filters.join(";"),
     "-map", "[v]", "-map", "[a]",
     "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-    output,
-  );
+    out,
+  ];
   try {
     await run(FFMPEG, args, { maxBuffer: 32 * 1024 * 1024 });
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string };
     throw new Error(e.code === "ENOENT" ? `ffmpeg is not installed (${FFMPEG_HINT}).` : `ffmpeg failed: ${(e.stderr ?? String(e)).slice(-600)}`);
   }
-  return { output, clips, duration: infos.reduce((sum, i) => sum + i.duration, 0) + hold, held_last_frame: Number(hold.toFixed(2)) };
+  return {
+    output: out,
+    clips: placed.map((c) => c.file),
+    duration: filmSeconds,
+    held_last_frame: Number(hold.toFixed(2)),
+    timeline: timelineOf(placed),
+    ...(cues.length ? { music_cues: cues.map((c) => ({ file: c.file, at: Number(c.at.toFixed(3)), seconds: Number(c.seconds.toFixed(3)), volume: c.volume, fade_in: Number(c.fadeIn.toFixed(3)), fade_out: Number(c.fadeOut.toFixed(3)) })) } : {}),
+  };
 }

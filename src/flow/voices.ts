@@ -4,29 +4,26 @@ import { execFile } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { powershell, psQuote } from "./platform.js";
+import { type WindowsVoice, formatArgs, formatOf, parseWindowsVoices } from "./voice-pure.js";
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FLOW_MUSIC_MCP_FFMPEG ?? "ffmpeg";
 const FFPROBE = process.env.FLOW_MUSIC_MCP_FFPROBE ?? "ffprobe";
 
-// The English voices this PC has installed (Settings > Time & language > Speech).
-export async function windowsVoices(): Promise<{ name: string; description: string }[]> {
+// Every voice this PC has installed (Settings > Time & language > Speech), with its culture (en-US, hr-HR ...) and gender.
+export async function windowsVoices(): Promise<WindowsVoice[]> {
   try {
     const out = powershell(
-      "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name }; $s.Dispose()",
+      "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name + '|' + $_.VoiceInfo.Gender }; $s.Dispose()",
     );
-    return out
-      .split(/\r?\n/)
-      .map((l) => l.trim().split("|"))
-      .filter(([name, culture]) => name && /^en-/i.test(culture ?? ""))
-      .map(([name, culture]) => ({ name: name as string, description: `${culture} · Windows, free` }));
+    return parseWindowsVoices(out);
   } catch {
     return [];
   }
 }
 
 // Speaks a line with a Windows voice, then levels it with ffmpeg like the other engines. Free and instant, but only as
-// good as the installed voice. `target` decides the format (.m4a, .wav, ...).
+// good as the installed voice. The extension of `target` decides the format (mp3, wav, ogg, m4a).
 export async function speakWithWindows(text: string, voice: string, target: string): Promise<{ output: string; duration: number }> {
   const stem = target.replace(/\.\w+$/, "");
   const raw = `${stem}.raw.wav`;
@@ -45,7 +42,7 @@ export async function speakWithWindows(text: string, voice: string, target: stri
     rmSync(lineFile, { force: true });
   }
   try {
-    await run(FFMPEG, ["-y", "-i", raw, "-af", "highpass=f=80,acompressor=threshold=-18dB:ratio=3:attack=5:release=120,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", target]);
+    await run(FFMPEG, ["-y", "-i", raw, "-af", "highpass=f=80,acompressor=threshold=-18dB:ratio=3:attack=5:release=120,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", ...formatArgs(formatOf(target)), target]);
   } finally {
     rmSync(raw, { force: true });
   }

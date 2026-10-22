@@ -209,6 +209,19 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
   position (`locateNew` in pure.ts), and a download whose tile title differs from the expected one fails instead.
 - Not run: a local `last_frame`, the 4K image download.
 
+### FMM-12: assemble timeline (2026-10-22, local ffmpeg, no credits)
+
+- `flow_assemble` `clips` items: a path, `{file, from?, to?}` or `{image, seconds, zoom?}`. `music_cues` (each `at`, `until?`, `volume?`, `fade_in?` 1.5, `fade_out?` 2; replaces `music`, which is now a cue with no fades) and `duck`. The graph and the clip/cue time maths are in `src/flow/timeline-pure.ts` (pure, tested); `assemble.ts` probes and runs ffmpeg. The result adds `timeline: [{index, file, at, seconds}]` and `music_cues`.
+- Ducking is `sidechaincompress` keyed on the voice track. The key is padded with `apad`: without it the compressor stopped at the end of the voice and the music vanished for the rest of the film (found live).
+- A still is `-loop 1 -framerate 24 -t <seconds>`; zoom is `zoompan` with `d=1` per looped frame. Film size is the biggest clip, rounded to even numbers; stills count for size.
+- Verified live (synthetic media): 3 stills + a trimmed video (1-4 s) + 2 cues + 4 Windows voice lines, `out` folder: 11.0 s h264 + aac; the 440 Hz cue fades in from 0, is silent after its 4 s end, the 660 Hz cue starts at 6 s; ducking made the bed about 4 dB lower under a voice and back to full after it. `dir` + `out` with `music` still works (2 clips, 12 s).
+
+### FMM-11: voices for VN Studio (2026-10-22)
+
+- `flow_narrate` gains `format` (`mp3 | wav | ogg | m4a`, default `m4a`; ffmpeg encoder per format in `src/flow/voice-pure.ts`, `formatArgs`). `text` may be up to 4000 characters for `gemini` and `windows`; engine `flow` stays at 400 (`textLimitError`). The result also reports `format`.
+- `flow_voices`: `windowsVoices()` lists every installed voice with `culture` and `gender` (not only `en-*`); Gemini voices carry `gender`; `gemini_model` shows the model in use. Default Gemini TTS model is now `gemini-3.8-flash-tts` (override: `FLOW_MUSIC_MCP_GEMINI_TTS`). A Gemini 429 says "rate limited".
+- Verified live 2026-10-22 (free): `gemini-3.8-flash-tts` made an English and a Croatian line as mp3 (48 kHz); Windows voices wrote wav, ogg (Vorbis), m4a (AAC) and mp3. This PC has only Microsoft David and Zira (en-US), so no Croatian Windows voice.
+
 ### FMM-10: local tools verified (2026-10-22, free)
 
 - `flow_assemble`: music bed + two timed `voice_lines` (whisper heard both in order; peak -3 dB), and `dir` + `out` (clips read from one folder, film written to the other).
