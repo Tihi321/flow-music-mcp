@@ -13,7 +13,7 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 - **Speech:** whisper.cpp 1.9.3 and `ggml-base.en.bin` installed by the tool in `~/.flow-music-mcp/whisper` and `~/.flow-music-mcp/models`.
 - **Credits:**
   - Flow: 1,010 left after FMM-02's tests (40 spent).
-  - Flow Music: the user's Google AI Pro plan gives 10,000 credits a month; the cost per song has not been measured.
+  - Flow Music: the user's Google AI Pro plan gives 10,000 credits a month; one song costs 5 credits (FMM-06: three songs of 1:32-2:59, vocal or instrumental).
 - **Verified live:**
   - Flow Music: instrumental songs (MP3, WAV) and downloads.
   - Flow images: single images, sets, variants, 1K/2K downloads, trash, a local reference image with upload rights agreed, and image edits.
@@ -24,11 +24,11 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 
 ## Flow Music
 
-- **Vocal songs are not tried.** Only instrumentals were made. Next: a song with lyrics in the `Lyrics` box (and the empty-lyrics case, whether Flow Music writes its own).
-- **Advanced settings are not tried:** `BPM`, `Length` (the accepted format is unknown), `Seed`, the Model menu and its options, and the M4A download. The driver code for them exists but has never run against the site.
-- **The cost per song is unknown.** Compose shows no quote, and the sidebar diamond (read 2 before and after two songs) is not the balance. Find where Flow Music shows credits (account or billing page), add the balance to `music_status`, and record the cost of an instrumental and a vocal song.
-- **Failure states are guessed.** A failed take and "out of credits" have never been seen; `songState` guesses from the row text. Capture the real DOM the first time either happens.
-- **`music_download` for a song not on the current page** opens `/song/<id>`, a layout that was never mapped.
+- ~~Vocal songs are not tried.~~ FMM-06: a song with lyrics sings them; with no lyrics Flow Music writes its own.
+- ~~Advanced settings are not tried.~~ FMM-06: BPM, Length (m:ss, 1:00-3:00, a target: 1:30 gave 1:39), Seed and the Model menu (Lyria 3.5, Lyria 3 Pro) work; M4A downloads. Lyria 3 Pro was not run.
+- ~~The cost per song is unknown.~~ FMM-06: 5 credits a song; `music_status` shows the balance (sidebar Settings menu) and jobs report `credits_spent`.
+- **Failure states are guessed.** A failed take and "out of credits" have never been seen; `songState` guesses from the row text. Since FMM-06 a failed or timed-out job saves a page dump to `~/.flow-music-mcp/debug/` and names it in the error; read it the first time one happens.
+- ~~`music_download` for a song not on the current page~~: FMM-06 mapped `/song/<id>` and downloads from it (verified).
 - **One generation at a time.** The user's plan allows several at once; the music queue runs them one by one with a 20-45 s pause. Option: a `concurrency` setting.
 - **Not exposed:** Remix, stems ("Get stems", "Split stems"), the music video ("Download video"), and the Producer chat route.
 - **Loops for visual novels.** Flow Music tracks play through; VN Studio wants loops. Options: loop-friendly prompts, or an ffmpeg tool that finds a loop point and crossfades it.

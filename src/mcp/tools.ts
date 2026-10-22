@@ -1,11 +1,11 @@
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, closedWindowError, withSitePage } from "../chrome.js";
-import { downloadSong, generate, inspect, listSongs, signedIn, type AudioFormat } from "../music.js";
+import { downloadSong, generate, inspect, listSongs, readCredits, signedIn, type AudioFormat } from "../music.js";
 import { buildLocalFlowTools } from "../flow/local-tools.js";
 import { buildFlowTools } from "../flow/tools.js";
 import { JobQueue, type Job } from "../queue.js";
-import { slug as slugOf } from "../util.js";
+import { lengthValid, slug as slugOf } from "../util.js";
 
 // The MCP tools. The tool shapes follow comfy-mcp (src/mcp/tools.ts): a generation is a background job, the call waits up
 // to `wait` seconds and returns the result or the job id, and music_wait collects it. The Flow Music tools (music_*) are
@@ -51,6 +51,8 @@ const jobView = (job: Job) => ({
   ...(job.progress ? { progress: job.progress } : {}),
   ...(job.error ? { error: job.error } : {}),
   ...(job.session ? { session: job.session } : {}),
+  ...(job.credits_spent !== undefined ? { credits_spent: job.credits_spent } : {}),
+  ...(job.credits_after !== undefined ? { credits_after: job.credits_after } : {}),
   songs: job.songs,
   files: job.songs.map((s) => s.file).filter(Boolean),
   title: job.params.title,
@@ -97,10 +99,13 @@ function buildMusicTools(): Tool[] {
         const chrome = await cdpUp();
         const busy = queue.busy;
         const signed = chrome && !busy ? await withSitePage("music", (page) => signedIn(page)) : undefined;
+        // Signed in and no job on the page; best effort (undefined when the menu could not be read).
+        const credits = signed ? await withSitePage("music", (page) => readCredits(page, { fresh: true })) : undefined;
         return {
           chrome_running: chrome,
           ...(busy ? { note: "A song is being made; the page was not touched, so signed_in was not checked." } : {}),
           signed_in: signed,
+          ...(credits !== undefined ? { credits } : {}),
           cdp_port: CDP_PORT,
           profile: PROFILE_DIR,
           default_out: DEFAULT_OUT,
@@ -111,23 +116,25 @@ function buildMusicTools(): Tool[] {
     ),
     def(
       "music_generate",
-      "Makes a song in Flow Music's Compose panel and downloads it (Compose makes one take, saved as <name>.<format>; if Flow Music ever returns more they are <name>-a, <name>-b). SPENDS FLOW MUSIC CREDITS: ask the user before the first one. Give lyrics with section tags ([Verse], [Chorus]...) or instrumental: true. BPM, length, seed and model switch on Compose's Advanced mode. Returns the files, or a job id while it is still running (then music_wait).",
-      z
-        .object({
+      "Makes a song in Flow Music's Compose panel and downloads it (Compose makes one take, saved as <name>.<format>; if Flow Music ever returns more they are <name>-a, <name>-b). SPENDS FLOW MUSIC CREDITS: ask the user before the first one. Give lyrics with section tags ([Verse], [Chorus]...), or instrumental: true; a vocal song with no lyrics lets Flow Music write them. BPM, length, seed and model switch on Compose's Advanced mode. The job reports credits_spent (balance before minus after) when both reads worked. Returns the files, or a job id while it is still running (then music_wait).",
+      z.object({
           sound: z.string().min(1).describe("Sound description: genre, instruments, mood, tempo, production (Compose's Sound box)"),
-          lyrics: z.string().optional().describe("Lyrics with section tags such as [Intro], [Verse 1], [Chorus], [Outro]"),
+          lyrics: z.string().optional().describe("Lyrics with section tags such as [Intro], [Verse 1], [Chorus], [Outro]. Leave out (with instrumental false) to let Flow Music write them"),
           instrumental: z.boolean().optional().describe("No vocals (Compose's instrumental switch)"),
           title: z.string().optional().describe("Song title (Compose's Details box)"),
           bpm: z.number().int().min(30).max(300).optional().describe("Tempo (Advanced)"),
-          length: z.string().optional().describe('Length as Flow Music takes it, e.g. "2:30" (Advanced; the accepted format is not verified yet)'),
+          length: z
+            .string()
+            .refine(lengthValid, "must be m:ss between 1:00 and 3:00 (a bare number is minutes)")
+            .optional()
+            .describe('Length as m:ss between 1:00 and 3:00, e.g. "2:30" (a bare number is minutes; Advanced)'),
           seed: z.number().int().min(0).optional().describe("Seed for repeatable takes (Advanced)"),
-          model: z.string().optional().describe('Model name as the Model menu shows it, e.g. "Lyria 3.5" (Advanced)'),
+          model: z.string().optional().describe('Model name as the Model menu starts it: "Lyria 3.5" (default, flagship) or "Lyria 3 Pro" (legacy) (Advanced)'),
           format,
           out,
           name: z.string().optional().describe("File name stem (default: the title as a slug)"),
           wait,
-        })
-        .refine((a) => a.instrumental || (a.lyrics ?? "").trim(), { message: "give lyrics, or instrumental: true" }),
+      }),
       async (a) => {
         const job = queue.add({
           sound: a.sound,

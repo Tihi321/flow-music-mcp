@@ -26,7 +26,7 @@ claude mcp add --transport http flow-music-mcp http://127.0.0.1:7462/mcp
 | Tool | What it does | Credits |
 |---|---|---|
 | `music_status` | Chrome up, signed in, folders, job queue | no |
-| `music_generate` | Compose → Generate → wait → download the take (`<name>.mp3|wav|m4a`, about a minute) | **yes** |
+| `music_generate` | Compose → Generate → wait → download the take (`<name>.mp3|wav|m4a`, about a minute). `length` is `m:ss` from 1:00 to 3:00, `model` is `Lyria 3.5` or `Lyria 3 Pro`, lyrics may be left out for a vocal song, the job reports `credits_spent` | **yes** |
 | `music_wait` | Waits for jobs (≤ 50 s per call) | no |
 | `music_jobs`, `music_cancel`, `music_retry` | The queue | retry: yes |
 | `music_download` | Downloads an existing song by id | no |

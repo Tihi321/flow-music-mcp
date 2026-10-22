@@ -67,12 +67,39 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
 - A Google cookie notice ("Hide") sits at the bottom; it does not block anything and is left alone.
 - The sidebar diamond read 2 before and after both generations, so it is probably not the credit balance.
 
+## Mapped live (2026-10-22, free, nothing generated; FMM-06)
+
+- Advanced box: `<label>BPM|Length|Seed</label>` + input are NOT tied together (no `for`), so `getByLabel` finds nothing; the driver
+  takes the first `input` after the label (`afterLabel`). BPM: 1-3 digits, no clamping. Seed: digits only. Length is normalised on
+  blur (Tab): "2:30" stays, "2" -> "2:00" (bare number = minutes), over 3:00 -> "3:00", under 1:00 -> "1:00", "90s" -> empty.
+  The tool validates 1:00-3:00 and reads the value back after Tab. Clearing a box (fill "" + Tab) returns it to Auto.
+- Model menu (radix `menuitem`s): "Lyria 3.5 Top performing, flagship model", "Lyria 3 Pro Legacy model"; matched by `^<model>(\s|$)`.
+- Credits: sidebar `button "Settings menu"` opens a menu with `menuitem "13190 credits"` (also Log out: never clicked). `readCredits` opens,
+  reads and presses Escape; `music_status` shows `credits` when idle and jobs get `credits_spent` (before minus after).
+  The sidebar diamond (read "3") is not the balance. The menu's balance is read at page load; it is stale until the next
+  navigation/reload, so `readCredits({ fresh: true })` reloads first. One vocal song with lyrics (1:32, Lyria 3.5 default) cost 5 credits (13,190 -> 13,185).
+- `/song/<id>`: no "More options for <title>" and no self-link; `main` has the title (`div role=textbox`), `Remix`, `Share` and
+  an unnamed `button[aria-haspopup=menu]` after Share whose menu is the same (Download submenu by keyboard works).
+  `music_download` uses it when the song is not in the page's list.
+- A vocal song with an empty `Lyrics` box can press Generate (enabled once Sound has text); Flow Music then writes and sings its own lyrics (verified below).
+- A failed or timed-out job writes `~/.flow-music-mcp/debug/music-<time>.json` (an `inspect` dump) and names it in the error.
+
+## Verified live (2026-10-22, FMM-06, three paid songs, 15 credits: 13,190 -> 13,175)
+
+- Vocal song with lyrics (synthpop, 1:32): whisper heard the given lyrics. 5 credits.
+- Vocal song with no lyrics (indie pop, 2:59): Flow Music wrote and sang its own lyrics. 5 credits, measured by the job.
+- Instrumental with Advanced BPM 100, Length 1:30, Seed 42, model Lyria 3.5, WAV: 1:39 long (Length is a target, not exact);
+  the song page shows the Sound text with ", 100 bpm" appended and the lyrics "[Instrumental] [End - 1:30]", so BPM and Length
+  reach the model as text. Seed and model are not shown anywhere. 5 credits.
+- Every song cost 5 credits, whatever its length or kind. `credits_spent` on the job is right once the after-read reloads.
+- `music_download` from `/song/<id>` (a song not in the list): M4A (AAC 48 kHz stereo, 3:01, 3.1 MB) and MP3 (3.7 MB).
+- The song page's Details submenu: Privacy, Link only, Edit details, Go to session, Pin to profile (no BPM or seed shown).
+
 ## Not verified yet
 
-- Lyrics (vocal songs), Advanced (BPM, Length format, Seed), the Model menu's options, M4A.
-- What a failed take looks like (`songState` guesses from its text), and an out-of-credits message.
-- The `/song/<id>` page when the song is not in the current list (`music_download` falls back to it).
-- What one song costs.
+- What a failed take looks like (`songState` guesses from its text), and an out-of-credits message (a debug dump is written
+  the first time one happens).
+- Lyria 3 Pro (the legacy model) in a run.
 
 ## Flow UI map (2026-10-22, PRO plan, flow.google.com, mapped live on CDP 9334 in the project "fmm-02-test")
 
