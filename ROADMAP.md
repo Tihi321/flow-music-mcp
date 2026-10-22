@@ -58,11 +58,9 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 
 ## Robustness
 
-- **No automated tests.** Add vitest unit tests for the pure parts:
-  - `matchScenes`, `limits.capOf`, the key parsing in `keys.ts`, `extensionOf`
-  - caption alignment and layout, `slug`, queue pacing
-
-  Live tests stay manual because they can spend credits.
+- ~~No automated tests.~~ Done in FMM-04: `yarn test` (vitest) covers the pure parts (`matchScenes`,
+  `newestNanoBanana`, `capOf`, key parsing, file-type sniffing, caption alignment and layout, `slug`, queue pacing,
+  song row text). Live tests stay manual because they can spend credits.
 - **Jobs live in memory**, so a restart forgets job ids (the files stay). Persist them to `~/.flow-music-mcp/jobs.json`.
 - **When Google changes a UI:** map it first with `flow_inspect` / `music_inspect`, or the Claude in Chrome extension on the user's own browser (signed in to the same account), then update `CLAUDE.md` with the date and fix on a branch.
 - **Chrome recovery.** A closed Flow/Music window or a Chrome crash mid-job is not handled or tested.

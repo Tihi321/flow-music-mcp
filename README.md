@@ -56,6 +56,10 @@ Flow asks "Rights to use this image" before it takes a local file (a first frame
 | `FLOW_MUSIC_MCP_CHROME` | found | Chrome executable |
 | `FLOW_MUSIC_MCP_PAUSE_MIN_S` / `_MAX_S` | 20 / 45 | pause between generations |
 
+## Tests
+
+`yarn test` runs the unit tests in `test/` (vitest): the pure helpers only, no browser and no network. The live tests against Flow Music and Flow are manual because they spend credits.
+
 ## Status
 
 Run end to end against Flow Music on 2026-10-22: an instrumental generated and downloaded as WAV in 46 s, and an existing song downloaded as MP3. Lyrics, the Advanced settings and the model menu are not tried yet; `CLAUDE.md` lists what is verified and what is not.

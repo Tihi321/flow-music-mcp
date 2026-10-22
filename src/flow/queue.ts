@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ImageSize } from "./driver.js";
+import { nextDelay } from "../util.js";
 
 // The Flow job queue, ported from flow-mcp (src/queue.ts): one Flow generation at a time with a randomised pause between
 // them, the way a person would use the site. Separate from the Flow Music queue (src/queue.ts): a song and a Flow job may
@@ -154,7 +155,7 @@ export class FlowJobQueue {
         const job = this.list().find((j) => j.status === "queued");
         if (!job) return;
         if (this.lastFinished) {
-          const remaining = this.lastFinished + PAUSE_MIN_MS + Math.random() * (PAUSE_MAX_MS - PAUSE_MIN_MS) - Date.now();
+          const remaining = nextDelay(this.lastFinished, Date.now(), PAUSE_MIN_MS, PAUSE_MAX_MS, Math.random);
           if (remaining > 0) {
             this.pausedReason = `pacing: next generation in ${Math.ceil(remaining / 1000)}s`;
             await new Promise((r) => setTimeout(r, remaining));

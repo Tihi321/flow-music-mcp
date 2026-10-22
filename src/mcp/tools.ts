@@ -5,6 +5,7 @@ import { downloadSong, generate, inspect, listSongs, signedIn, withPage, type Au
 import { buildLocalFlowTools } from "../flow/local-tools.js";
 import { buildFlowTools } from "../flow/tools.js";
 import { JobQueue, type Job } from "../queue.js";
+import { slug as slugOf } from "../util.js";
 
 // The MCP tools. The tool shapes follow comfy-mcp (src/mcp/tools.ts): a generation is a background job, the call waits up
 // to `wait` seconds and returns the result or the job id, and music_wait collects it. The Flow Music tools (music_*) are
@@ -42,14 +43,7 @@ const out = z
   .optional()
   .describe(`Absolute output folder (default ${DEFAULT_OUT})`);
 
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .replace(/[\s_]+/g, "-")
-    .slice(0, 60) || "song";
+const slug = (s: string) => slugOf(s, "song");
 
 const jobView = (job: Job) => ({
   job_id: job.id,

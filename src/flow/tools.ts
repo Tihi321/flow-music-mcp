@@ -12,6 +12,7 @@ import { downloadTile, downloadTileAll, ensureProjectGrid, findTile, flowState, 
 import { FlowJobQueue, type Aspect, type FlowJob } from "./queue.js";
 import { TECHNIQUES } from "./techniques.js";
 import { runContinue, runVideoEdit } from "./video.js";
+import { slug as slugOf } from "../util.js";
 
 // The Flow MCP tools (flow.google.com). Names and shapes follow flow-mcp so skills and habits carry over; the engine is new
 // (src/flow/agent.ts): every generation goes through Flow's creative agent. Images (Nano Banana) are free, Flow video and
@@ -35,14 +36,7 @@ const aspect = z.enum(["16:9", "4:3", "1:1", "3:4", "9:16"]);
 const size = z.enum(["1K", "2K", "4K"]).default("1K").describe("Image size: 1K original, 2K or 4K upscaled (rendered on demand, can take minutes; 4K is unverified and may not be free)");
 const startNumber = z.number().int().min(1).optional().describe("First scene number for the file names (default: the next free number for this name in the output folder)");
 
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .replace(/[\s_]+/g, "-")
-    .slice(0, 60) || "image";
+const slug = (s: string) => slugOf(s, "image");
 
 // Guidance handed to the calling model through flow_status, so it plans work Flow can run.
 const PLAYBOOK = [

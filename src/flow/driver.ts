@@ -4,6 +4,7 @@ import { extractZip } from "./platform.js";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { FLOW_URL, HOME_DIR, inEnglish, withDownloadLock } from "../chrome.js";
+import { mediaExtensionOfBytes } from "../util.js";
 
 // The Google Flow UI driver (flow.google.com), rewritten for the redesigned Flow of 2026-10-22. Ported logic and lessons
 // from flow-mcp (github.com/GTAI-1/flow-mcp, src/flow.ts, ISC per its package.json): the grid is virtual, tiles are found
@@ -415,14 +416,7 @@ export function extensionOf(file: string): string {
   } finally {
     closeSync(fd);
   }
-  const ascii = (from: number, to: number) => head.subarray(from, to).toString("latin1");
-  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return ".jpeg";
-  if (head[0] === 0x89 && ascii(1, 4) === "PNG") return ".png";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return ".webp";
-  if (ascii(4, 8) === "ftyp") return ".mp4";
-  if (ascii(0, 4) === "GIF8") return ".gif";
-  if (head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04) return ".zip";
-  return ".bin";
+  return mediaExtensionOfBytes(head);
 }
 
 // Image download submenu (2026-10-22): "1K Original size", "2K Upscaled", "4K Upscaled".

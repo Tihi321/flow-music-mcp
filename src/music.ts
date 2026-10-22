@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { HOME_DIR, MUSIC_URL, getMusicPage, withDownloadLock } from "./chrome.js";
+import { audioExtensionOfBytes, classifySongText, renderingNote } from "./util.js";
 
 // The Flow Music UI driver. Every selector here was mapped from the live page (see CLAUDE.md, "UI map"); never guess one.
 // Flow Music is driven through its Compose panel, not the Producer chat: Compose takes the sound, lyrics and title as
@@ -176,7 +177,7 @@ async function pageNotice(page: Page): Promise<string> {
 // song link yet; the link appears when the take is done (seen 2026-10-22: ~1 min for an instrumental).
 async function rendering(page: Page): Promise<string | undefined> {
   const text = ((await page.locator("main").innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
-  return /(\d+%\s*)?Generating [^.]{0,60}/.exec(text)?.[0] ?? (/Creating "/.test(text) ? "creating" : undefined);
+  return renderingNote(text);
 }
 
 // A finished take's row. A failed one has not been seen yet: this guesses from its text.
@@ -184,9 +185,7 @@ async function songState(page: Page, id: string): Promise<"ready" | "busy" | "fa
   const row = songRow(page, id);
   if (!(await row.count())) return "busy";
   const text = (await row.innerText().catch(() => "")).replace(/\s+/g, " ");
-  if (/\bfailed\b|couldn.t|could not|something went wrong/i.test(text)) return "failed";
-  if (/\d+\s*%|generating/i.test(text)) return "busy";
-  return "ready";
+  return classifySongText(text);
 }
 
 export async function generate(page: Page, p: ComposeParams, progress: (note: string) => void): Promise<{ session: string; songs: Song[] }> {
@@ -302,14 +301,7 @@ function extensionOf(file: string): string | undefined {
   } finally {
     closeSync(fd);
   }
-  const ascii = (from: number, to: number) => head.subarray(from, to).toString("latin1");
-  if (ascii(0, 3) === "ID3" || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0)) return ".mp3";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE") return ".wav";
-  if (ascii(4, 8) === "ftyp") return ".m4a";
-  if (ascii(0, 4) === "OggS") return ".ogg";
-  if (ascii(0, 4) === "fLaC") return ".flac";
-  if (ascii(0, 2) === "PK") return ".zip";
-  return undefined;
+  return audioExtensionOfBytes(head);
 }
 
 // The row's "More options" menu: Download > M4A | MP3 | WAV (also "Download video" and "Get stems", not used here).
