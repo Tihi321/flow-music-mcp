@@ -51,6 +51,7 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 - ~~`flow_assemble` with music, several `voice_lines`, `dir` + `out`~~: verified in FMM-10 (music bed mixed under two timed lines, heard in order by whisper, peak -3 dB; clips read from `dir`, film written to `out`).
 - `flow_set_key`: the rejection paths are verified (FMM-10: too short, placeholder, a well-formed key Google refuses; no file written). Saving a real key through the tool is not run (the key comes from `.env`).
 - ~~Captions and transcription in other languages~~: FMM-10 downloaded the 574 MB model; Croatian, German and Spanish lines transcribe correctly and Croatian captions render with diacritics. Pass the language for Croatian: auto-detect called it Ukrainian and wrote Cyrillic.
+- ~~Voices for VN Studio~~ (FMM-11): `flow_narrate` `format` (mp3/wav/ogg/m4a), text up to 4000 characters for gemini and windows (flow stays 400), `flow_voices` with cultures, Gemini genders and the model, default model `gemini-3.8-flash-tts` (English and Croatian lines made live as mp3). Croatian by ear and Windows voices for other cultures are not checked.
 - ~~Gemini TTS languages~~: English, Croatian, German and Spanish work (FMM-10). The free tier refused the 5th request in a minute (429); a retry a minute later worked. Windows voices: only Microsoft David and Zira (en-US) are installed. Installing more is the user's choice, in Windows settings.
 
 ## Robustness

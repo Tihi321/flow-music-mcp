@@ -5,12 +5,13 @@ import { HOME_DIR } from "../chrome.js";
 import type { Tool } from "../mcp/tools.js";
 import { assemble, voiceTrack } from "./assemble.js";
 import { burnCaptions, captionedName, captionSetup, prepareSpeech, transcribe } from "./captions.js";
-import { GEMINI_VOICES, speakWithGemini } from "./gemini.js";
+import { GEMINI_MODEL, GEMINI_VOICES, speakWithGemini } from "./gemini.js";
 import { languageNote } from "./language-note.js";
 import { keyStatus, setGeminiKey } from "./keys.js";
 import { capOf } from "./limits.js";
 import { TECHNIQUES } from "./techniques.js";
 import { narrateWithFlow } from "./tools.js";
+import { AUDIO_FORMATS, TEXT_MAX_ANY, textLimitError } from "./voice-pure.js";
 import { speakWithWindows, windowsVoices } from "./voices.js";
 
 // The local (no browser) Flow tools: voices, narration, assembly, captions, technique presets. Shapes and descriptions
@@ -74,12 +75,13 @@ export function buildLocalFlowTools(): Tool[] {
   return [
     def(
       "flow_voices",
-      "Narrator voices available for flow_narrate: Google AI Studio's (with whether a key is set up, never the key itself) and the English voices installed on this PC (engine `windows`).",
+      "Narrator voices available for flow_narrate: Google AI Studio's (with whether a key is set up, never the key itself) and every voice installed on this PC with its culture, e.g. en-US or hr-HR (engine `windows`). Gemini voices carry a gender; `gemini_model` is the TTS model in use.",
       z.object({}),
       async () => {
         const key = keyStatus();
         return {
           gemini: GEMINI_VOICES,
+          gemini_model: GEMINI_MODEL,
           gemini_ready: key.ready,
           gemini_key_source: key.source,
           gemini_key_last4: key.last4,
@@ -90,7 +92,7 @@ export function buildLocalFlowTools(): Tool[] {
     ),
     def(
       "flow_narrate",
-      "Record narration as an .m4a, free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'; the language follows the text, checked with English, Croatian, German and Spanish; the free tier allows only a few requests per minute, so wait about a minute after a 429); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and cap nothing. flow_assemble can lay the result over a film.",
+      "Record narration as an audio file (`format`: mp3, wav, ogg or m4a, default m4a), free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'; the language follows the text, checked with English, Croatian, German and Spanish; the free tier allows only a few requests per minute, so wait about a minute after a 429); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and take up to 4000 characters of text (engine flow: 400). flow_assemble can lay the result over a film.",
       z.object({
         out: outDir,
         name: z.string().optional().describe("File name stem (default narration-001, -002, ...)"),
@@ -101,7 +103,8 @@ export function buildLocalFlowTools(): Tool[] {
         max_credits: z.number().int().min(1).optional().describe("Engine flow only: the live quote of the take must not exceed it. Default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset)."),
         project: z.string().optional().describe("Engine flow only: the Flow project (name or id) to make the take in. Default: the project open in the Flow tab."),
         image: z.string().optional().describe("Engine flow only: the picture the voice speaks from (Flow needs one): 'asset:<media_id or title>' or an absolute path. Default: the project's newest image."),
-        text: z.string().min(1).max(400).describe("The line to speak. About 20 words fits 8 s, 30 words fits 12 s; anything longer needs a longer take."),
+        format: z.enum(AUDIO_FORMATS).default("m4a").describe("File format for engines gemini and windows: mp3, wav, ogg (Vorbis) or m4a (AAC, the default). Engine flow always makes .m4a."),
+        text: z.string().min(1).max(TEXT_MAX_ANY).describe("The line to speak, up to 4000 characters for gemini and windows. Engine flow takes at most 400 characters; about 20 words fit 8 s, 30 words 12 s."),
         voice: z.string().min(1).default("Charon").describe("Voice name from flow_voices, e.g. Charon (informative), Aoede (breezy), Gacrux (mature) for Google; Microsoft Zira Desktop or Microsoft David Desktop for Windows (the default Charon maps to Zira there)."),
         style: z.string().max(200).optional().describe("Delivery note for the 'gemini' engine, e.g. 'slowly and warmly, like a documentary narrator'."),
       }),
@@ -109,14 +112,16 @@ export function buildLocalFlowTools(): Tool[] {
         const output_dir = a.out ?? FLOW_OUT;
         mkdirSync(output_dir, { recursive: true });
         const stem = (a.name ?? "").replace(/[^\w.-]+/g, "_") || nextStem(output_dir, "narration");
+        const tooLong = textLimitError(a.engine, a.text.trim());
+        if (tooLong) throw new Error(tooLong);
         if (a.engine === "flow") {
           const voice = a.voice === "Charon" || !a.voice ? "Charon" : a.voice;
           return narrateWithFlow({ text: a.text, voice, out: output_dir, name: stem, max_credits: capOf(a.max_credits), project: a.project, image: a.image });
         }
-        const target = join(output_dir, `${stem}.m4a`);
+        const target = join(output_dir, `${stem}.${a.format}`);
         const voice = a.engine === "windows" && a.voice === "Charon" ? "Microsoft Zira Desktop" : a.voice;
         const spoken = a.engine === "windows" ? await speakWithWindows(a.text.trim(), voice, target) : await speakWithGemini(a.text.trim(), voice, target, a.style);
-        return { output_dir, credits: 0, engine: a.engine, voice, ...spoken };
+        return { output_dir, credits: 0, engine: a.engine, voice, format: a.format, ...spoken };
       },
     ),
     def(

@@ -209,6 +209,12 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
   position (`locateNew` in pure.ts), and a download whose tile title differs from the expected one fails instead.
 - Not run: a local `last_frame`, the 4K image download.
 
+### FMM-11: voices for VN Studio (2026-10-22)
+
+- `flow_narrate` gains `format` (`mp3 | wav | ogg | m4a`, default `m4a`; ffmpeg encoder per format in `src/flow/voice-pure.ts`, `formatArgs`). `text` may be up to 4000 characters for `gemini` and `windows`; engine `flow` stays at 400 (`textLimitError`). The result also reports `format`.
+- `flow_voices`: `windowsVoices()` lists every installed voice with `culture` and `gender` (not only `en-*`); Gemini voices carry `gender`; `gemini_model` shows the model in use. Default Gemini TTS model is now `gemini-3.8-flash-tts` (override: `FLOW_MUSIC_MCP_GEMINI_TTS`). A Gemini 429 says "rate limited".
+- Verified live 2026-10-22 (free): `gemini-3.8-flash-tts` made an English and a Croatian line as mp3 (48 kHz); Windows voices wrote wav, ogg (Vorbis), m4a (AAC) and mp3. This PC has only Microsoft David and Zira (en-US), so no Croatian Windows voice.
+
 ### FMM-10: local tools verified (2026-10-22, free)
 
 - `flow_assemble`: music bed + two timed `voice_lines` (whisper heard both in order; peak -3 dB), and `dir` + `out` (clips read from one folder, film written to the other).

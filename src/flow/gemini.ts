@@ -3,36 +3,21 @@ import { execFile } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { geminiKey } from "./keys.js";
+import { DEFAULT_GEMINI_TTS, GEMINI_VOICES, formatArgs, formatOf, geminiRateLimited } from "./voice-pure.js";
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FLOW_MUSIC_MCP_FFMPEG ?? "ffmpeg";
 const FFPROBE = process.env.FLOW_MUSIC_MCP_FFPROBE ?? "ffprobe";
-const MODEL = process.env.FLOW_MUSIC_MCP_GEMINI_TTS ?? "gemini-2.5-flash-preview-tts";
+const MODEL = process.env.FLOW_MUSIC_MCP_GEMINI_TTS ?? DEFAULT_GEMINI_TTS;
+export const GEMINI_MODEL = MODEL;
 
-// Gemini's prebuilt voices. Flow draws on the same set, so a narration made here matches one made in Flow.
-export const GEMINI_VOICES = [
-  { name: "Zephyr", description: "bright" }, { name: "Puck", description: "upbeat" },
-  { name: "Charon", description: "informative" }, { name: "Kore", description: "firm" },
-  { name: "Fenrir", description: "excitable" }, { name: "Leda", description: "youthful" },
-  { name: "Orus", description: "firm" }, { name: "Aoede", description: "breezy" },
-  { name: "Callirrhoe", description: "easy-going" }, { name: "Autonoe", description: "bright" },
-  { name: "Enceladus", description: "breathy" }, { name: "Iapetus", description: "clear" },
-  { name: "Umbriel", description: "easy-going" }, { name: "Algieba", description: "smooth" },
-  { name: "Despina", description: "smooth" }, { name: "Erinome", description: "clear" },
-  { name: "Algenib", description: "gravelly" }, { name: "Rasalgethi", description: "informative" },
-  { name: "Laomedeia", description: "upbeat" }, { name: "Achernar", description: "soft" },
-  { name: "Alnilam", description: "firm" }, { name: "Schedar", description: "even" },
-  { name: "Gacrux", description: "mature" }, { name: "Pulcherrima", description: "forward" },
-  { name: "Achird", description: "friendly" }, { name: "Zubenelgenubi", description: "casual" },
-  { name: "Vindemiatrix", description: "gentle" }, { name: "Sadachbia", description: "lively" },
-  { name: "Sadaltager", description: "knowledgeable" }, { name: "Sulafat", description: "warm" },
-];
+export { GEMINI_VOICES };
 
 interface TtsPart {
   inlineData?: { mimeType?: string; data?: string };
 }
 
-// Speaks a line with Gemini's TTS. Free tier, no Flow credits, no length cap, and the same voices Flow uses.
+// Speaks a line with Gemini's TTS. Free tier, no Flow credits, and the same voices Flow uses. The extension of `target` decides the format (mp3, wav, ogg, m4a).
 export async function speakWithGemini(text: string, voice: string, target: string, style?: string): Promise<{ output: string; duration: number }> {
   const key = geminiKey();
   if (!key) {
@@ -59,7 +44,7 @@ export async function speakWithGemini(text: string, voice: string, target: strin
   const body = (await res.json()) as { error?: { message?: string }; candidates?: { content?: { parts?: TtsPart[] } }[] };
   if (res.status === 429) {
     // Seen live: the 5th quick call in a row on the free tier; a retry a minute later worked.
-    throw new Error(`Gemini TTS free tier allows only a few requests per minute: wait about a minute and retry. Google says: ${body.error?.message ?? "no detail"}`);
+    throw new Error(geminiRateLimited(body.error?.message));
   }
   if (!res.ok) throw new Error(`Gemini TTS refused this take (${res.status}): ${body.error?.message ?? "no detail"}`);
   const part = body.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
@@ -71,7 +56,7 @@ export async function speakWithGemini(text: string, voice: string, target: strin
   writeFileSync(raw, Buffer.from(part.inlineData.data, "base64"));
   await run(FFMPEG, [
     "-y", "-f", "s16le", "-ar", String(rate), "-ac", "1", "-i", raw,
-    "-af", "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", target,
+    "-af", "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", ...formatArgs(formatOf(target)), target,
   ]);
   const { stdout } = await run(FFPROBE, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", target]);
   const duration = Number(stdout.trim());
