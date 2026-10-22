@@ -42,6 +42,10 @@ A generation runs as a job: the call waits up to `wait` seconds (default 30) and
 
 `flow_narrate` writes `<name>.<format>` with `format` `mp3`, `wav`, `ogg` or `m4a` (default `m4a`). Engines `gemini` (free key, `GEMINI_API_KEY`) and `windows` (free, no key) take text up to 4000 characters; engine `flow` (paid) stays at 400. `flow_voices` lists the Gemini voices with their gender, the TTS model in use (`gemini_model`, default `gemini-3.8-flash-tts`, override with `FLOW_MUSIC_MCP_GEMINI_TTS`) and every Windows voice installed with its culture (`en-US`, `hr-HR` ...). A Gemini 429 says "rate limited": wait about a minute.
 
+### Assembling a film (`flow_assemble`)
+
+`clips` are played in order; each is a path, `{file, from?, to?}` (a video cut to that part) or `{image, seconds, zoom?}` (a still held for `seconds`, silent, optional slow zoom-in). Music is one `music` bed or `music_cues: [{file, at, until?, volume?, fade_in?, fade_out?}]` (each cue starts at `at`, loops or is cut to `until`, default the film's end; fades default 1.5 s in and 2 s out). `duck: true` lowers the music while `voiceover` / `voice_lines` speak. The result has `timeline` (each clip's start and length) and the placed `music_cues`. Local ffmpeg, no credits.
+
 ## Keys and settings
 
 Settings are environment variables, and you can keep them in a `.env` file instead of setting them in Windows:

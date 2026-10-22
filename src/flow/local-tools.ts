@@ -132,12 +132,44 @@ export function buildLocalFlowTools(): Tool[] {
     ),
     def(
       "flow_assemble",
-      "Join video clips in order into one MP4 (local ffmpeg, no credits). Keeps each clip's own sound and can lay a music track and a voiceover on top; a narration longer than the footage holds the last frame. To use stills, make a clip first (ffmpeg -loop 1 -i still.png -t 5 clip.mp4). Pass `clips` (absolute paths, in play order) or `dir` holding scene-NN.mp4 / clip-NN.mp4 files. The film is saved in `out`.",
+      "Join video clips in order into one MP4 (local ffmpeg, no credits). Keeps each clip's own sound and can lay music and a voiceover on top; a narration longer than the footage holds the last frame. Pass `clips` in play order or `dir` holding scene-NN.mp4 / clip-NN.mp4 files. A clip is an absolute path, `{file, from?, to?}` (a video trimmed to that part) or `{image, seconds, zoom?}` (a still held for `seconds`, silent, optional slow zoom-in). Music: one `music` bed, or `music_cues` (each starts at `at`, runs to `until`, fades in and out; replaces `music`). `duck: true` lowers the music while the voice (`voiceover` / `voice_lines`) speaks. The result lists `timeline` (each clip's start `at` and `seconds` in the film) and the placed `music_cues`. The film is saved in `out`.",
       z.object({
         out: outDir,
         dir: z.string().refine(isAbsolute, "must be an absolute path").optional().describe("Absolute folder holding the clips, used when `clips` is not given: every scene-NN.mp4 / clip-NN.mp4 / edit-NN.mp4 in it (the film is then saved there unless `out` is given)."),
-        clips: z.array(absPath).optional().describe("Absolute clip paths in play order."),
+        clips: z
+          .array(
+            z.union([
+              absPath,
+              z.object({
+                file: abs("Absolute path of a video."),
+                from: z.number().min(0).optional().describe("Start of the part to keep, seconds into the video (default 0)."),
+                to: z.number().min(0).optional().describe("End of the part to keep, seconds into the video (default its end)."),
+              }),
+              z.object({
+                image: abs("Absolute path of a still picture (png, jpg)."),
+                seconds: z.number().min(0.1).max(600).describe("How long the still is held, seconds. It is silent."),
+                zoom: z.union([z.boolean(), z.number().min(1).max(2)]).optional().describe("true: slow zoom-in to 1.1x over the still; a number is the end scale (1-2)."),
+              }),
+            ]),
+          )
+          .optional()
+          .describe("Clips in play order: an absolute path, {file, from?, to?} or {image, seconds, zoom?}."),
         music: abs("Absolute path to a music file; looped and trimmed to the film length.").optional(),
+        music_cues: z
+          .array(
+            z.object({
+              file: abs("Absolute path to a music file; looped if shorter than the cue."),
+              at: z.number().min(0).describe("Where the cue starts in the film, seconds."),
+              until: z.number().min(0).optional().describe("Where it ends in the film, seconds (default the film's end)."),
+              volume: z.number().min(0).max(1).optional().describe("0-1 (default music_volume)."),
+              fade_in: z.number().min(0).max(30).optional().describe("Fade-in seconds (default 1.5)."),
+              fade_out: z.number().min(0).max(30).optional().describe("Fade-out seconds (default 2)."),
+            }),
+          )
+          .max(20)
+          .optional()
+          .describe("Several music cues at set times, each with fades. Replaces `music` when given."),
+        duck: z.boolean().default(false).describe("Lower the music while the voice (voiceover or voice_lines) speaks. Does nothing without a voice or music."),
         music_volume: z.number().min(0).max(1).default(0.25),
         clip_volume: z.number().min(0).max(1).default(1).describe("Volume of the clips' own sound, 0-1. Lower it (around 0.2-0.3) so a narration sits clearly on top; 1 keeps it as recorded."),
         voiceover: abs("Absolute path to a voiceover audio file, starts at 0:00.").optional(),
