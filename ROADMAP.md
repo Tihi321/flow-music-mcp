@@ -39,12 +39,10 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
   - Likeness mode of `flow_continue` (frame as an ingredient plus characters).
   - 720p and the Veo models (quotes seen: Omni 720p 8 s x2 = 24, Veo 3.1 Quality = 100).
   - The 4K image download.
-  - A failed tile in the direct composer.
-  - Re-asking the agent for a scene it really dropped.
-  - Cancelling a running job.
+  - FMM-08 (implemented and unit-tested): a failed tile in the direct composer (Retry only for tiles new since Start, counted once; not seen live), re-asking the agent for a dropped scene (the "what is left, another round?" rule is a tested pure function; not seen live), cancelling a running job (verified live 2026-10-22 on free images: cancelled while queued -> `cancelled`; cancelled just after it started -> "cancelled before starting (nothing spent)". Not caught: a cancel after Start, since a free image finishes in seconds).
 - **Local frames through upload.** Uploads work since the user set upload rights (one local reference image, 2026-10-22). Still not run: a local `first_frame` / `last_frame`, and `chain_previous`, which uploads the previous clip's last frame. Unverified: that the uploaded tile is titled `fm-<job>-<label>`, which the waiter matches.
-- **Video identity.** A settled video tile has no media id (its thumbnail is re-signed), so videos are found again by title, and titles repeat. Record a stable handle when the video finishes (the first thumbnail uuid or the video src).
-- **High demand.** During a "Flow is currently experiencing high demand" banner, the agent's video edits failed 3 times (no charge). Detect the banner and say so in the error instead of retrying blindly.
+- **Video identity.** FMM-08: a video is now also named `asb:<token>` (the `/asb/<token>` part of its thumbnail; `flow_assets` shows it, `flow_download`, `flow_edit`, `flow_continue` and `flow_trash` accept it; job files carry `thumb`). Verified live 2026-10-22: `flow_assets` lists all 5 videos of fmm-02-test (two share a title and used to collapse into one; fixed with `tileKey`), `flow_download` by `asb:` fetched the right one of the two same-titled clips, and a stale token gives a clear "run flow_assets again" error. Tokens survive reloads, but one of five changed within an hour: re-list before use.
+- **High demand.** FMM-08: errors from the waiters start with "Flow reports high demand: ..." when the banner is on the page, the agent wait stops at once on "Something went wrong" instead of waiting for the timeout, and no re-ask follows. Unit-tested (`flowTrouble`); not yet verified live, because it needs the banner to be up.
 - **The agent's "Confirm before generating: Never" is never used.** `flow_agent_images` keeps "Always" so the credit card can be answered against `max_credits`. Fine for images; revisit if agent video batches are wanted.
 - **Not automated:** Flow's own Scenes (timeline, `Add to scene`), Library collections, Tools (mini-apps), Publish to YouTube, Share.
 - **Credits** are read from the account panel, which only exists on the grid view; `flow_status` goes back to the grid first.

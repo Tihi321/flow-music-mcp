@@ -5,6 +5,7 @@ import {
   dismissCookieNotice,
   downloadTile,
   ensureProjectGrid,
+  flowNotice,
   openProject,
   pause,
   scanNew,
@@ -13,6 +14,7 @@ import {
   topIds,
   type Tile,
 } from "./driver.js";
+import { flowTrouble, sceneRound, tileKey, troubleMessage } from "./pure.js";
 import type { FlowFile, FlowJob, JobOutcome } from "./queue.js";
 
 // Flow's creative agent (the right-hand session panel, `flow-agent-panel`). Since the redesign of 2026-10-22 everything
@@ -234,6 +236,8 @@ export interface WaitResult {
   timedOut: boolean;
   refused?: string;
   said: string;
+  // Flow's own words when the agent's reply or the page says the request failed (waiting stopped at once).
+  trouble?: string;
 }
 
 // What the agent last said, without the icon words of the feedback buttons.
@@ -285,6 +289,13 @@ export async function waitForAgent(page: Page, o: WaitOptions): Promise<WaitResu
       idleSince = 0;
       o.progress(counting ? "Flow is rendering" : "the agent is working");
     } else {
+      // The agent's reply says it failed ("Something went wrong") or Flow is overloaded: stop here, not at the timeout.
+      const said = await agentText(page);
+      const t = flowTrouble(said);
+      if (t && t.kind !== "failed") {
+        const banner = flowTrouble((await flowNotice(page)).banner);
+        return { timedOut: false, refused, said, trouble: troubleMessage(banner ?? t) };
+      }
       idleSince ||= Date.now();
       // Done: idle for a few seconds after it worked, or nothing started at all for 25 s (the agent may just have answered).
       if ((sawWork && Date.now() - idleSince > 5000) || (!sawWork && Date.now() - started > 25_000)) return { timedOut: false, refused, said: await agentText(page) };
@@ -374,12 +385,14 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
   let said = "";
   let failedTiles = 0;
   let asked = 0;
+  let trouble: string | undefined;
   try {
     progress("setting the agent's image defaults");
     restore = await setAgentSettings(page, { imageAspect: p.aspect, imageCount: p.variants, imageModel: p.model ?? "latest" });
     const known = new Set(await topIds(page));
-    for (let round = 0; round < 3; round++) {
-      const todo = p.scenes.map((_, i) => i).filter((i) => !done.has(i));
+    let lastProduced: number | undefined;
+    for (let round = 0; ; round++) {
+      const todo = sceneRound(p.scenes.length, done, round, lastProduced);
       if (!todo.length) break;
       if (round) {
         progress(`asking the agent again for ${todo.length} scene(s)`);
@@ -398,11 +411,12 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
       timedOut ||= waited.timedOut;
       if (waited.refused === "cancelled") throw new Error("cancelled");
       if (waited.refused) throw new Error(waited.refused);
+      trouble = waited.trouble ?? trouble;
 
       progress("collecting the new tiles");
       const fresh = await collectFresh(page, known);
       failedTiles += fresh.errors;
-      for (const t of fresh.tiles) known.add(t.id);
+      for (const t of fresh.tiles) known.add(tileKey(t));
       const images = fresh.tiles.filter((t) => t.kind === "image");
 
       // Tiles finish in any order and the agent may reword, so each is matched to its scene by the prompt Flow stored for it.
@@ -439,7 +453,9 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
         }
       }
       if (images.length > prompts.filter(Boolean).length) notes.push(`${images.length - prompts.filter(Boolean).length} new tile(s) had no readable stored prompt`);
-      if (!produced && round > 0) break;
+      lastProduced = produced;
+      // Asking again while Flow says it is failing or overloaded only repeats the failure.
+      if (waited.trouble && !produced) break;
     }
   } finally {
     progress("putting the agent settings back");
@@ -451,8 +467,9 @@ export async function runImages(page: Page, job: FlowJob, hooks: { progress: (s:
   const failed = p.scenes.map((_, i) => i).filter((i) => !done.has(i)).map((i) => p.numbers[i]!);
   files.sort((a, b) => a.scene - b.scene || a.variant - b.variant);
   if (timedOut) notes.push("the agent stalled and was stopped");
+  if (trouble) notes.push(trouble);
   if (failedTiles) notes.push(`${failedTiles} tile(s) failed in Flow (nothing charged)`);
-  if (!files.length) throw new Error(`No image could be made for any scene (${asked} request(s)). The agent said: ${said.slice(-400) || "nothing"}`);
+  if (!files.length) throw new Error(`${trouble ? `${trouble} ` : ""}No image could be made for any scene (${asked} request(s)). The agent said: ${said.slice(-400) || "nothing"}`);
   return {
     files,
     failed,

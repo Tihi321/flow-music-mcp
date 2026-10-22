@@ -378,7 +378,7 @@ export function buildFlowTools(): Tool[] {
     ),
     def(
       "flow_cancel",
-      "Cancels a queued Flow job. A running job is asked to stop (the agent's Stop button is pressed) and ends as cancelled with whatever finished.",
+      "Cancels a queued Flow job. A running job is asked to stop at its next check (the agent's Stop button is pressed): before Flow's Start is pressed nothing is spent; after it, the generation already started in Flow finishes and is charged there. A job that already made files ends done (note: finished before the cancel took effect), otherwise cancelled.",
       z.object({ job_id: z.string() }),
       async (a) => {
         const job = queue.cancel(a.job_id);
@@ -412,7 +412,7 @@ export function buildFlowTools(): Tool[] {
     ),
     def(
       "flow_assets",
-      "Lists the media in a Flow project's grid (newest first): media_id, title and kind (image, video, scene). media_id is the stable handle; titles repeat. Spends no credits. Not available while a job is running.",
+      "Lists the media in a Flow project's grid (newest first): media_id, title and kind (image, video, scene). media_id is the stable handle (a settled video has no uuid, so it shows asb:<token>, which is stable across reloads but can change after a while: re-list before use; flow_download, flow_edit, flow_continue and flow_trash accept it); titles repeat. Spends no credits. Not available while a job is running.",
       z.object({
         project,
         kind: z.enum(["image", "video", "scene"]).optional(),
@@ -424,13 +424,13 @@ export function buildFlowTools(): Tool[] {
           return {
             project: { url: page.url() },
             count: assets.length,
-            assets: assets.slice(0, a.limit).map((t) => ({ media_id: t.id.startsWith("title:") ? undefined : t.id, title: t.title, kind: t.kind, ...(t.busy ? { rendering: true } : {}) })),
+            assets: assets.slice(0, a.limit).map((t) => ({ media_id: t.id.startsWith("title:") ? (t.thumb ? `asb:${t.thumb}` : undefined) : t.id, title: t.title, kind: t.kind, ...(t.busy ? { rendering: true } : {}) })),
           };
         }),
     ),
     def(
       "flow_download",
-      "Downloads one existing Flow image or video by media_id (from flow_assets or a job) or by title. Images: size 1K (original), 2K or 4K (upscaled). Videos: quality original (as made) or upscaled (720p upscale; renders on demand). Spends no credits. Not available while a job is running.",
+      "Downloads one existing Flow image or video by media_id (from flow_assets or a job; asb:<token> for videos) or by title. Images: size 1K (original), 2K or 4K (upscaled). Videos: quality original (as made) or upscaled (720p upscale; renders on demand). Spends no credits. Not available while a job is running.",
       z.object({
         media_id: z.string().min(8).optional(),
         title: z.string().min(1).optional().describe("Title, when there is no media_id (exact match first, then prefix; the newest wins)"),

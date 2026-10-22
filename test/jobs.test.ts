@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closedWindowError } from "../src/chrome.js";
-import { BaseJobQueue, MAX_JOBS, RESTART_ERROR, type BaseJob } from "../src/jobs.js";
+import { BaseJobQueue, MAX_JOBS, RESTART_ERROR, statusAfterRun, type BaseJob } from "../src/jobs.js";
 
 interface TJob extends BaseJob<{ n: number }> {
   out?: number;
@@ -22,6 +22,16 @@ class TQueue extends BaseJobQueue<TJob, { n: number }, number> {
   }
 }
 
+// A queue like Flow's: cancels running jobs, and a result above 0 counts as made.
+class CancelQueue extends TQueue {
+  protected override get cancelsRunning(): boolean {
+    return true;
+  }
+  protected override madeSomething(out: number): boolean {
+    return out > 0;
+  }
+}
+
 let dir: string;
 let file: string;
 beforeEach(() => {
@@ -31,6 +41,39 @@ beforeEach(() => {
   file = join(dir, "jobs.json");
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe("statusAfterRun", () => {
+  it("is done unless a cancel was requested and nothing was made", () => {
+    expect(statusAfterRun(undefined, false)).toBe("done");
+    expect(statusAfterRun(true, true)).toBe("done");
+    expect(statusAfterRun(true, false)).toBe("cancelled");
+  });
+});
+
+describe("cancel of a running job", () => {
+  const run = async (made: number, throws = false) => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const q = new CancelQueue(async () => {
+      await gate;
+      if (throws) throw new Error("cancelled");
+      return made;
+    }, undefined);
+    const job = q.add({ n: 1 });
+    await new Promise((r) => setTimeout(r, 5));
+    q.cancel(job.id);
+    release();
+    await q.idle();
+    return q.get(job.id)!;
+  };
+  it("ends done when the runner returned something", async () => {
+    expect(await run(2)).toMatchObject({ status: "done", out: 2 });
+  });
+  it("ends cancelled when it made nothing, or threw", async () => {
+    expect((await run(0)).status).toBe("cancelled");
+    expect(await run(0, true)).toMatchObject({ status: "cancelled", error: "cancelled" });
+  });
+});
 
 describe("BaseJobQueue", () => {
   it("runs jobs in order, pausing between them but not before the first", async () => {

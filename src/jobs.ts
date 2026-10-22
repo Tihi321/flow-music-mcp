@@ -36,6 +36,12 @@ export interface QueueOptions {
 export const MAX_JOBS = 200;
 export const RESTART_ERROR = "The server restarted before this job finished; files already saved are kept. Use *_retry to run it again.";
 
+// A runner that resolved after a cancel request: done when it made something, cancelled when it made nothing. (A runner that
+// threw after a cancel request stays cancelled: its error says why.)
+export function statusAfterRun(cancelRequested: boolean | undefined, made: boolean): "done" | "cancelled" {
+  return cancelRequested && !made ? "cancelled" : "done";
+}
+
 type JobsFile = Record<string, unknown[]>;
 
 // The whole file, or {} when missing. A corrupt file is moved to <file>.bad and treated as empty.
@@ -84,6 +90,13 @@ export abstract class BaseJobQueue<J extends BaseJob<P>, P, R = unknown> {
   }
   // Runs when a job starts.
   protected started(_job: J): void {}
+  // Whether a runner's result holds something worth keeping (Flow: files). A job cancelled while running that made
+  // something ends "done", not "cancelled".
+  protected madeSomething(_out: R): boolean {
+    return false;
+  }
+  // Runs when a cancel request came too late: the job finished with results.
+  protected finishedAfterCancel(_job: J): void {}
 
   // Jobs from the file; one that was queued or running when the server stopped is failed, never resumed (it could
   // spend credits again).
@@ -216,9 +229,11 @@ export abstract class BaseJobQueue<J extends BaseJob<P>, P, R = unknown> {
         this.started(job);
         this.save();
         try {
-          this.apply(job, await this.runner(job));
+          const out = await this.runner(job);
+          this.apply(job, out);
           job.error = undefined;
-          job.status = job.cancelRequested ? "cancelled" : "done";
+          job.status = statusAfterRun(job.cancelRequested, this.madeSomething(out));
+          if (job.cancelRequested && job.status === "done") this.finishedAfterCancel(job);
         } catch (err) {
           job.error = err instanceof Error ? err.message : String(err);
           job.status = job.cancelRequested ? "cancelled" : "failed";

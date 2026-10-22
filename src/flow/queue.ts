@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { HOME_DIR } from "../chrome.js";
 import { BaseJobQueue, type BaseJob, type JobStatus } from "../jobs.js";
 import type { ImageSize } from "./driver.js";
+import { FINISHED_AFTER_CANCEL } from "./pure.js";
 
 // The Flow job queue, ported from flow-mcp (src/queue.ts): one Flow generation at a time with a randomised pause between
 // them, the way a person would use the site. Separate from the Flow Music queue (src/queue.ts): a song and a Flow job may
@@ -56,6 +57,8 @@ export interface FlowFile {
   media_id: string;
   title: string;
   variant: number;
+  // The video's /asb/ token (FMM-08): a settled video tile has no uuid, "asb:<thumb>" is its handle.
+  thumb?: string;
 }
 
 export interface FlowJob extends BaseJob<FlowJobParams> {
@@ -89,7 +92,7 @@ export class FlowJobQueue extends BaseJobQueue<FlowJob, FlowJobParams, JobOutcom
     super(runner, { key: "flow", file, pauseMinMs: PAUSE_MIN_MS, pauseMaxMs: PAUSE_MAX_MS });
   }
 
-  // A running Flow job is asked to stop (the agent's Stop button) and ends as cancelled.
+  // A running Flow job is asked to stop (the agent's Stop button) and ends as cancelled, or done when it had already made files.
   protected override get cancelsRunning(): boolean {
     return true;
   }
@@ -100,6 +103,14 @@ export class FlowJobQueue extends BaseJobQueue<FlowJob, FlowJobParams, JobOutcom
 
   protected override started(job: FlowJob): void {
     job.attempts++;
+  }
+
+  protected override madeSomething(out: JobOutcome): boolean {
+    return out.files.length > 0;
+  }
+
+  protected override finishedAfterCancel(job: FlowJob): void {
+    job.note = [job.note, FINISHED_AFTER_CANCEL].filter(Boolean).join(" · ");
   }
 
   protected apply(job: FlowJob, out: JobOutcome): void {
