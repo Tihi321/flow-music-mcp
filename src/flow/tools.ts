@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, withSitePage } from "../chrome.js";
+import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, closedWindowError, withSitePage } from "../chrome.js";
 import type { Tool } from "../mcp/tools.js";
 import { runImages } from "./agent.js";
 import { extractAudio, extractLastFrame } from "./chain.js";
@@ -12,6 +12,7 @@ import { downloadTile, downloadTileAll, ensureProjectGrid, findTile, flowState, 
 import { FlowJobQueue, type Aspect, type FlowJob } from "./queue.js";
 import { TECHNIQUES } from "./techniques.js";
 import { runContinue, runVideoEdit } from "./video.js";
+import { slug as slugOf } from "../util.js";
 
 // The Flow MCP tools (flow.google.com). Names and shapes follow flow-mcp so skills and habits carry over; the engine is new
 // (src/flow/agent.ts): every generation goes through Flow's creative agent. Images (Nano Banana) are free, Flow video and
@@ -35,14 +36,7 @@ const aspect = z.enum(["16:9", "4:3", "1:1", "3:4", "9:16"]);
 const size = z.enum(["1K", "2K", "4K"]).default("1K").describe("Image size: 1K original, 2K or 4K upscaled (rendered on demand, can take minutes; 4K is unverified and may not be free)");
 const startNumber = z.number().int().min(1).optional().describe("First scene number for the file names (default: the next free number for this name in the output folder)");
 
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .replace(/[\s_]+/g, "-")
-    .slice(0, 60) || "image";
+const slug = (s: string) => slugOf(s, "image");
 
 // Guidance handed to the calling model through flow_status, so it plans work Flow can run.
 const PLAYBOOK = [
@@ -187,6 +181,8 @@ export function buildFlowTools(): Tool[] {
           return made;
         }
       }
+    }).catch((err) => {
+      throw closedWindowError("flow", err);
     }),
   );
   flowQueue = queue;
@@ -249,7 +245,7 @@ export function buildFlowTools(): Tool[] {
     ),
     def(
       "flow_generate",
-      "Makes images or videos in Flow's direct composer, one paced job per scene, and downloads them as <name>-NN.<ext> (NN = scene number; variants -vN). The prompt goes in EXACTLY as written, and the composer's live credit quote is read BEFORE anything starts: the scene is refused (nothing spent) when it exceeds max_credits. IMAGES (Nano Banana) ARE FREE. VIDEO SPENDS CREDITS: ask the user first and pass max_credits (required for video; Omni 1.1 Flash 360p 4 s x1 quotes 4, 720p 8 s 12, Veo 3.1 Lite 10, Fast 20, Quality 100). Options per scene: type, model, aspect_ratio, duration/resolution (Omni), variants, first_frame / last_frame (a local file, or asset:<media_id>), reference_images (up to 3; Flow's composer takes frames OR references on a video), chain_previous (continue the previous scene from its last frame; the frame is uploaded, which makes Flow ask YOU to confirm rights once: flow_continue needs no upload), reference_previous (the previous scene's image as a reference), technique (a flow_techniques id). Returns the files and the credit quote, or job ids while still running (then flow_wait). For many free images at once use flow_agent_images.",
+      "Makes images or videos in Flow's direct composer, one paced job per scene, and downloads them as <name>-NN.<ext> (NN = scene number; variants -vN). The prompt goes in EXACTLY as written, and the composer's live credit quote is read BEFORE anything starts: the scene is refused (nothing spent) when it exceeds max_credits. IMAGES (Nano Banana) ARE FREE. VIDEO SPENDS CREDITS: ask the user first and pass max_credits (required for video; measured quotes at 16:9 x1: Omni 1.1 Flash 360p 4 s 4, 720p 4 s 7 (720p 8 s x2 24); Veo 3.1 Lite 10, Fast 20, Quality 100; Veo has no resolution/duration options, clips are fixed at 8 s, and those two are ignored with a note). Options per scene: type, model, aspect_ratio, duration/resolution (Omni), variants, first_frame / last_frame (a local file, or asset:<media_id>), reference_images (up to 3; Flow's composer takes frames OR references on a video), chain_previous (continue the previous scene from its last frame; the frame is uploaded, which makes Flow ask YOU to confirm rights once: flow_continue needs no upload), reference_previous (the previous scene's image as a reference), technique (a flow_techniques id). Returns the files and the credit quote, or job ids while still running (then flow_wait). For many free images at once use flow_agent_images.",
       z.object({
         scenes: z
           .array(
@@ -375,14 +371,14 @@ export function buildFlowTools(): Tool[] {
         await queue.wait(ids, a.timeout_seconds * 1000);
         const jobs = ids.map((id) => {
           const job = queue.get(id);
-          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Not a job of this server process (it may have restarted). Check flow_assets: Flow's grid is the honest record." };
+          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Unknown job id (jobs are kept for the last 200 per server, so it may be older or from another install). Check flow_assets: Flow's grid is the honest record." };
         });
         return { finished: jobs.every((j) => !["queued", "running"].includes(j.status)), paused: queue.pausedReason ?? undefined, jobs };
       },
     ),
     def(
       "flow_cancel",
-      "Cancels a queued Flow job. A running job is asked to stop (the agent's Stop button is pressed) and ends as cancelled with whatever finished.",
+      "Cancels a queued Flow job. A running job is asked to stop at its next check (the agent's Stop button is pressed): before Flow's Start is pressed nothing is spent; after it, the generation already started in Flow finishes and is charged there. A job that already made files ends done (note: finished before the cancel took effect), otherwise cancelled.",
       z.object({ job_id: z.string() }),
       async (a) => {
         const job = queue.cancel(a.job_id);
@@ -403,6 +399,7 @@ export function buildFlowTools(): Tool[] {
           if (job.status === "done" && job.failed_scenes.length) {
             const pick = job.failed_scenes.map((n) => job.params.numbers.indexOf(n)).filter((i) => i >= 0);
             job.failed_scenes = [];
+            queue.save();
             jobs.push(queue.add({ ...job.params, scenes: pick.map((i) => job.params.scenes[i]!), numbers: pick.map((i) => job.params.numbers[i]!), label: `retry of ${job.id}` }));
             continue;
           }
@@ -415,7 +412,7 @@ export function buildFlowTools(): Tool[] {
     ),
     def(
       "flow_assets",
-      "Lists the media in a Flow project's grid (newest first): media_id, title and kind (image, video, scene). media_id is the stable handle; titles repeat. Spends no credits. Not available while a job is running.",
+      "Lists the media in a Flow project's grid (newest first): media_id, title and kind (image, video, scene). media_id is the stable handle (a settled video has no uuid, so it shows asb:<token>, which is stable across reloads but can change after a while: re-list before use; flow_download, flow_edit, flow_continue and flow_trash accept it); titles repeat. Spends no credits. Not available while a job is running.",
       z.object({
         project,
         kind: z.enum(["image", "video", "scene"]).optional(),
@@ -427,13 +424,13 @@ export function buildFlowTools(): Tool[] {
           return {
             project: { url: page.url() },
             count: assets.length,
-            assets: assets.slice(0, a.limit).map((t) => ({ media_id: t.id.startsWith("title:") ? undefined : t.id, title: t.title, kind: t.kind, ...(t.busy ? { rendering: true } : {}) })),
+            assets: assets.slice(0, a.limit).map((t) => ({ media_id: t.id.startsWith("title:") ? (t.thumb ? `asb:${t.thumb}` : undefined) : t.id, title: t.title, kind: t.kind, ...(t.busy ? { rendering: true } : {}) })),
           };
         }),
     ),
     def(
       "flow_download",
-      "Downloads one existing Flow image or video by media_id (from flow_assets or a job) or by title. Images: size 1K (original), 2K or 4K (upscaled). Videos: quality original (as made) or upscaled (720p upscale; renders on demand). Spends no credits. Not available while a job is running.",
+      "Downloads one existing Flow image or video by media_id (from flow_assets or a job; asb:<token> for videos) or by title. Images: size 1K (original), 2K or 4K (upscaled). Videos: quality original (as made) or upscaled (720p upscale; renders on demand). Spends no credits. Not available while a job is running.",
       z.object({
         media_id: z.string().min(8).optional(),
         title: z.string().min(1).optional().describe("Title, when there is no media_id (exact match first, then prefix; the newest wins)"),

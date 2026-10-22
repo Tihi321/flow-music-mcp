@@ -2,6 +2,7 @@ import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { withDownloadLock } from "../chrome.js";
+import { CANCEL_AFTER_START, CANCEL_BEFORE_START, parseAsbHandle, tileKey } from "./pure.js";
 import { applySettings, attachAsset, ensureDirectComposer, typePrompt, waitForNewMedia } from "./direct.js";
 import {
   clearBackdrops,
@@ -14,9 +15,12 @@ import {
   openProject,
   pause,
   readAccount,
+  readTiles,
   scanGrid,
   topIds,
   tileResolver,
+  tileThumb,
+  troubleText,
   useOwnDownloadDir,
   waitForDownloadedFile,
 } from "./driver.js";
@@ -31,11 +35,16 @@ import type { FlowFile, FlowJob, JobOutcome } from "./queue.js";
 type Hooks = { progress: (s: string) => void; cancelled: () => boolean };
 
 const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-/;
+// "<Flow's own trouble text>. " or "".
+const withTrouble = async (page: Page) => {
+  const t = await troubleText(page);
+  return t ? `${t}. ` : "";
+};
 const credits = async (page: Page) => (await readAccount(page).catch((): { credits?: number } => ({}))).credits;
 
-// A video of the project by media id or by (the start of) its title.
+// A video of the project by media id, by asb:<token> handle (flow_assets) or by (the start of) its title.
 async function resolveVideo(page: Page, ref: string): Promise<{ id: string; title: string }> {
-  if (uuidRe.test(ref)) {
+  if (uuidRe.test(ref) || parseAsbHandle(ref)) {
     const tile = await findTile(page, ref);
     return { id: ref, title: (await tile.getAttribute("aria-label")) ?? "" };
   }
@@ -43,7 +52,7 @@ async function resolveVideo(page: Page, ref: string): Promise<{ id: string; titl
   const match = (t: { kind: string; title: string }) => t.kind === "video" && t.title.toLowerCase().startsWith(want);
   const found = (await scanGrid(page, (tiles) => tiles.some(match))).find(match);
   if (!found) throw new Error(`No video whose title starts with "${ref}". Use flow_assets (kind video) to list them.`);
-  return { id: found.id, title: found.title };
+  return { id: tileKey(found), title: found.title };
 }
 
 async function openEditView(page: Page, tile: Locator): Promise<void> {
@@ -107,9 +116,9 @@ export async function runContinue(page: Page, job: FlowJob, hooks: Hooks): Promi
       await pause(page, 3500);
     }
     progress("reading the quote");
-    const quote = await applySettings(page, { ...run, frames_attached: !likeness });
+    const { quote, ignored } = await applySettings(page, { ...run, frames_attached: !likeness });
     if (quote > p.max_credits) throw new Error(`Flow quotes ${quote} credits for this continuation, above max_credits=${p.max_credits}. Nothing was generated.`);
-    job.note = `quote ${quote} credit(s)`;
+    job.note = `quote ${quote} credit(s)${ignored ? ` · ${ignored}` : ""}`;
     if (likeness) {
       // R2V: the frame as an ingredient, plus the characters; the opening frame is only approximate.
       const opener = page.getByRole("button", { name: "Add ingredients to the prompt box" });
@@ -119,7 +128,8 @@ export async function runContinue(page: Page, job: FlowJob, hooks: Hooks): Promi
     await typePrompt(page, p.scenes[0]!);
     const start = page.getByRole("button", { name: "Start generation" });
     if (!(await start.isEnabled())) throw new Error("Flow's Start generation button is disabled; the prompt or the frame was not accepted.");
-    const before = new Set(await topIds(page));
+    const before = await topIds(page);
+    if (hooks.cancelled()) throw new Error(CANCEL_BEFORE_START);
     progress("generating the continuation");
     await start.click({ timeout: 6000 });
     const fresh = await waitForNewMedia(page, before, 1, "video", 12 * 60_000, 0, hooks);
@@ -127,8 +137,9 @@ export async function runContinue(page: Page, job: FlowJob, hooks: Hooks): Promi
     const files: FlowFile[] = [];
     progress("downloading");
     for (const t of fresh) {
-      const saved = await downloadTileAll(page, tileResolver(page, t.id, t.title), join(p.output_dir, `${p.file_stem}-${String(p.numbers[0]).padStart(2, "0")}${files.length ? `-v${files.length + 1}` : ""}`), run.download_quality);
-      for (const file of saved) files.push({ scene: p.numbers[0]!, file, media_id: t.id, title: t.title, variant: files.length + 1 });
+      const saved = await downloadTileAll(page, tileResolver(page, t.id, t.title, t.thumb), join(p.output_dir, `${p.file_stem}-${String(p.numbers[0]).padStart(2, "0")}${files.length ? `-v${files.length + 1}` : ""}`), run.download_quality);
+      const thumb = t.thumb ?? (await tileThumb(page, tileResolver(page, t.id, t.title)));
+      for (const file of saved) files.push({ scene: p.numbers[0]!, file, media_id: t.id, title: t.title, variant: files.length + 1, ...(thumb ? { thumb } : {}) });
     }
     const after = await credits(page);
     const spent = balance !== undefined && after !== undefined ? balance - after : undefined;
@@ -179,6 +190,8 @@ export async function runVideoEdit(page: Page, job: FlowJob, hooks: Hooks): Prom
   const balance = await credits(page);
   if (balance !== undefined && balance < p.max_credits) throw new Error(`The balance (${balance}) is below max_credits (${p.max_credits}); nothing was started.`);
   await ensureProjectGrid(page);
+  // A failed edit leaves a new error tile in the grid; the ones already there are not ours.
+  const errorsBefore = (await readTiles(page)).filter((t) => t.error).length;
 
   progress("opening the edit view");
   await openEditView(page, await findTile(page, source.id));
@@ -191,6 +204,7 @@ export async function runVideoEdit(page: Page, job: FlowJob, hooks: Hooks): Prom
   await pause(page, 600);
   const start = page.getByRole("button", { name: "Start generation" });
   if (!(await start.isEnabled())) throw new Error("Flow did not accept the edit prompt (Start generation stayed disabled).");
+  if (hooks.cancelled()) throw new Error(CANCEL_BEFORE_START);
   progress("editing the video");
   await start.click({ timeout: 6000 });
 
@@ -200,18 +214,27 @@ export async function runVideoEdit(page: Page, job: FlowJob, hooks: Hooks): Prom
   let seen = false;
   for (;;) {
     await pause(page, 3000);
-    if (hooks.cancelled()) throw new Error("cancelled");
+    if (hooks.cancelled()) throw new Error(CANCEL_AFTER_START);
     const text = (await page.locator("main").first().innerText().catch(() => "")).replace(/\s+/g, " ");
     const pct = /(\d+)%/.exec(text)?.[0];
     if (pct) {
       seen = true;
       progress(`Flow is editing: ${pct}`);
     } else if (seen) break;
-    else if (Date.now() - t0 > 30_000 && !seen) throw new Error("The edit never started (no progress after 30 s). Check flow_assets and the balance before trying again.");
-    if (Date.now() > deadline) throw new Error("Timed out waiting for Flow to finish the video edit. Check flow_assets and the balance: it may still arrive (and may have been charged).");
+    else if (Date.now() - t0 > 30_000 && !seen) throw new Error(`${await withTrouble(page)}The edit never started (no progress after 30 s). Check flow_assets and the balance before trying again.`);
+    if (Date.now() > deadline) throw new Error(`${await withTrouble(page)}Timed out waiting for Flow to finish the video edit. Check flow_assets and the balance: it may still arrive (and may have been charged).`);
   }
   await pause(page, 2500);
   // A failed edit leaves an error tile in the grid ("Sorry, this video failed to generate"): look before downloading.
+  progress("checking the result");
+  await page.getByRole("button", { name: "Back button to go to previous page" }).click({ timeout: 6000 }).catch(() => {});
+  await pause(page, 2500);
+  await ensureProjectGrid(page);
+  const errorsNow = (await readTiles(page)).filter((t) => t.error).length;
+  if (errorsNow > errorsBefore) {
+    throw new Error(`${await withTrouble(page)}Flow reports the video edit failed ("Sorry, this video failed to generate"; failed tiles are not charged, check the balance with flow_status). The failed tile is still in the project; nothing was downloaded.`);
+  }
+  await openEditView(page, await findTile(page, source.id));
   progress("downloading the edited video");
   const stem = join(p.output_dir, `${p.file_stem}-${String(p.numbers[0]).padStart(2, "0")}`);
   const file = await downloadFromEditView(page, stem, p.download_quality ?? "original");

@@ -115,7 +115,7 @@ export const CAPTION_LANGUAGES = [
   ["he", "עברית"], ["fa", "فارسی"], ["hi", "हिन्दी"], ["ur", "اردو"], ["bn", "বাংলা"], ["ta", "தமிழ்"], ["id", "Bahasa Indonesia"],
   ["ms", "Bahasa Melayu"], ["tl", "Filipino"], ["vi", "Tiếng Việt"], ["th", "ไทย"], ["ja", "日本語"], ["zh", "中文"], ["yue", "粵語"],
   ["ko", "한국어"], ["sv", "Svenska"], ["da", "Dansk"], ["no", "Norsk"], ["fi", "Suomi"], ["el", "Ελληνικά"], ["cs", "Čeština"],
-  ["ro", "Română"], ["hu", "Magyar"], ["ca", "Català"], ["sw", "Kiswahili"],
+  ["ro", "Română"], ["hu", "Magyar"], ["ca", "Català"], ["sw", "Kiswahili"], ["hr", "Hrvatski"],
 ].map(([code, name]) => ({ code, name }));
 // Written without spaces between words: whisper's tokens are then pieces of words, so words come from the language's
 // own word breaker, and they are drawn side by side with no space between them.
@@ -347,7 +347,7 @@ interface WhisperJson {
 // whisper.cpp's word-sized segments (-ml 1) run each word into the next, hiding every pause. Its tokens keep the real
 // gaps, so words are rebuilt from those: a token that starts with a space starts a new word, anything else (", 't")
 // belongs to the word before it, and a lone opening mark (¿, «) belongs to the word after it.
-function wordsFromTokens(json: WhisperJson, lang: string): Word[] {
+export function wordsFromTokens(json: WhisperJson, lang: string): Word[] {
   const words: Word[] = [];
   if (UNSPACED.has(lang)) {
     // Here tokens are pieces of words (人 / 工 / 知 / 能), so each character takes its time from its token and words
@@ -393,7 +393,7 @@ function wordsFromTokens(json: WhisperJson, lang: string): Word[] {
 
 // Splits text written without spaces into words (Intl.Segmenter knows each language's dictionary), keeping punctuation
 // with its word. from/to are positions in the text.
-function segmentWords(text: string, lang: string): { text: string; from: number; to: number }[] {
+export function segmentWords(text: string, lang: string): { text: string; from: number; to: number }[] {
   const out: { text: string; from: number; to: number }[] = [];
   let open: { text: string; from: number } | undefined;
   for (const s of new Intl.Segmenter(lang, { granularity: "word" }).segment(text)) {
@@ -540,7 +540,7 @@ interface State {
   to: number;
 }
 
-function paginate(words: Word[], maxWords: number, maxChars: number, sep: string): Word[][] {
+export function paginate(words: Word[], maxWords: number, maxChars: number, sep: string): Word[][] {
   const pages: Word[][] = [];
   let cur: Word[] = [];
   let chars = 0;
@@ -566,7 +566,7 @@ function paginate(words: Word[], maxWords: number, maxChars: number, sep: string
   return pages;
 }
 
-function layout(heard: Word[], style: CaptionStyle, width: number, height: number, size: CaptionSize, letters: CaptionLetters, lead: number, lang: string): { pages: Word[][]; states: State[] } {
+export function layout(heard: Word[], style: CaptionStyle, width: number, height: number, size: CaptionSize, letters: CaptionLetters, lead: number, lang: string): { pages: Word[][]; states: State[] } {
   const words = heard.map((w) => ({ ...w, start: Math.max(0, w.start - lead), end: Math.max(0, w.end - lead) }));
   const s = CAPTION_STYLES[style];
   const u = (Math.min(width, height) / 100) * scaleOf(size);
@@ -624,7 +624,7 @@ function textOn(hex: string): string {
 // case selected"). A name is a word written with a capital where no sentence starts - the speech model and the user's
 // corrections both capitalise names - and every other time that word appears, plus any names passed in. "I" is not a
 // name. Captions in capitals or as said need nothing: names are already right there.
-function namesIn(words: Word[], extra: string[] = []): string[] {
+export function namesIn(words: Word[], extra: string[] = []): string[] {
   const names = new Set(extra.map(norm).filter(Boolean));
   words.forEach((w, i) => {
     const bare = w.text.replace(/^[^\p{L}\p{N}]+/u, "");

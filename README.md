@@ -26,14 +26,17 @@ claude mcp add --transport http flow-music-mcp http://127.0.0.1:7462/mcp
 | Tool | What it does | Credits |
 |---|---|---|
 | `music_status` | Chrome up, signed in, folders, job queue | no |
-| `music_generate` | Compose → Generate → wait → download the take (`<name>.mp3|wav|m4a`, about a minute) | **yes** |
+| `music_generate` | Compose → Generate → wait → download the take (`<name>.mp3|wav|m4a`, about a minute). `length` is `m:ss` from 1:00 to 3:00, `model` is `Lyria 3.5` or `Lyria 3 Pro`, lyrics may be left out for a vocal song, `loop_friendly` adds loop wording to the Sound (a hint only), the job reports `credits_spent` | **yes** |
+| `music_remix` | Remix an existing song from its page: `variation` (same sound and lyrics, new seed) or `extend` (continues the song; optional `instruction`); a job like `music_generate`, saved as `<name>.mp3|wav|m4a` | **yes** (5 measured) |
+| `music_video` | Song menu → Download video → template card → `<name>.mp4`. `simple` (default) cost 0; `player`, `modern`, `music_video` cost unknown. A first render can take over 3 minutes: the call runs until the file arrives (up to 15 min) | simple: no; others: unknown |
+| `music_loop` | Local ffmpeg: finds a seamless loop in a .wav/.mp3/.m4a and writes `<name>-loop.<ext>` with the end crossfaded into the start; returns the points, a match score and seam checks | no |
 | `music_wait` | Waits for jobs (≤ 50 s per call) | no |
 | `music_jobs`, `music_cancel`, `music_retry` | The queue | retry: yes |
 | `music_download` | Downloads an existing song by id | no |
 | `music_songs` | Newest songs in your library | no |
 | `music_inspect` | Every visible control on the page, for fixing selectors | no |
 
-A generation runs as a job: the call waits up to `wait` seconds (default 30) and otherwise returns a job id for `music_wait`. Jobs run one at a time with a 20-45 s pause between them.
+A generation runs as a job: the call waits up to `wait` seconds (default 30) and otherwise returns a job id for `music_wait`. Jobs run one at a time with a 20-45 s pause between them. Jobs (Flow Music and Flow, the last 200 of each) are saved in `~/.flow-music-mcp/jobs.json`, so job ids and finished files survive a restart; a job that was queued or running at the time comes back as failed (never resumed on its own, since it could spend credits again) and `*_retry` runs it again. If the Chrome window is closed during a job, the job fails with a message saying so; it reopens on the next call.
 
 ## Keys and settings
 
@@ -55,6 +58,10 @@ Flow asks "Rights to use this image" before it takes a local file (a first frame
 | `FLOW_MUSIC_MCP_HOME` | `~/.flow-music-mcp` | profile, downloads, default output |
 | `FLOW_MUSIC_MCP_CHROME` | found | Chrome executable |
 | `FLOW_MUSIC_MCP_PAUSE_MIN_S` / `_MAX_S` | 20 / 45 | pause between generations |
+
+## Tests
+
+`yarn test` runs the unit tests in `test/` (vitest): the pure helpers only, no browser and no network. The live tests against Flow Music and Flow are manual because they spend credits.
 
 ## Status
 

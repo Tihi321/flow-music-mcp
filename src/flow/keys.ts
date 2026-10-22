@@ -5,17 +5,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import "../env.js";
 import { HOME_DIR } from "../chrome.js";
+import { looksLikeKey, plausible } from "./key-format.js";
 
 const OWN_FILE = () => join(HOME_DIR, "gemini-key");
 const LEGACY_FILE = () => join(homedir(), ".flow-mcp", "gemini-key");
-
-// A key is one unbroken run of characters (AI Studio keys start "AIza", newer ones "AQ"). Anything shorter or still
-// holding template text is not a key.
-const plausible = (raw: string): string | undefined => {
-  const key = raw.trim();
-  if (!key || key.length < 20 || /^(YOUR|PASTE|<|\$)/i.test(key) || /_KEY|KEY_HERE|EXAMPLE/i.test(key)) return undefined;
-  return key;
-};
 
 function find(): { key: string; source: string } | undefined {
   const env = plausible(process.env.GEMINI_API_KEY ?? "");
@@ -39,7 +32,7 @@ export function keyStatus(): { ready: boolean; source?: string; last4?: string }
 // placeholder key can never replace one that works. The check lists models (no text-to-speech quota is spent).
 export async function setGeminiKey(raw: string): Promise<{ saved: true; file: string; last4: string }> {
   const key = raw.trim();
-  if (!/^[A-Za-z0-9._~+/=-]{20,512}$/.test(key) || /^(YOUR|PASTE|<|\$)/i.test(key) || /_KEY|KEY_HERE|EXAMPLE/i.test(key)) {
+  if (!looksLikeKey(key)) {
     throw new Error("That doesn't look like a Google AI Studio key. Copy the whole key from aistudio.google.com/apikey, with no spaces.");
   }
   const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { headers: { "x-goog-api-key": key } }).catch(() => null);

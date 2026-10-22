@@ -5,7 +5,7 @@ MCP server (Streamable HTTP on 127.0.0.1:7462, TypeScript) that drives Google Fl
 (`C:\projects\Personal\flow-mcp`, github.com/GTAI-1/flow-mcp), which drives Google Flow; read its CLAUDE.md for lessons
 that apply here too (download folder, pacing, virtual lists, never two CDP clients on one Chrome).
 
-- `src/chrome.ts` launch/attach Chrome, `getPage(site)`, per-site lock · `src/music.ts` Flow Music UI driver · `src/queue.ts` paced job queue ·
+- `src/chrome.ts` launch/attach Chrome, `getPage(site)`, per-site lock · `src/music.ts` Flow Music UI driver · `src/jobs.ts` generic paced job queue with `jobs.json` persistence (`src/queue.ts` music, `src/flow/queue.ts` Flow subclasses) ·
   `src/flow/` Google Flow: `driver.ts`, `agent.ts`, `queue.ts`, `tools.ts` (see "Flow UI map") ·
   `src/mcp/tools.ts` the MCP tools · `src/mcp/http.ts` + `server.ts` transport (copied from comfy-mcp) · `src/login.ts`
 - Build `yarn build`; run `node dist/index.js`; sign in once with `yarn login`. Settings and keys: `.env` (see `.env.example`).
@@ -67,12 +67,70 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
 - A Google cookie notice ("Hide") sits at the bottom; it does not block anything and is left alone.
 - The sidebar diamond read 2 before and after both generations, so it is probably not the credit balance.
 
+## Mapped live (2026-10-22, free, nothing generated; FMM-06)
+
+- Advanced box: `<label>BPM|Length|Seed</label>` + input are NOT tied together (no `for`), so `getByLabel` finds nothing; the driver
+  takes the first `input` after the label (`afterLabel`). BPM: 1-3 digits, no clamping. Seed: digits only. Length is normalised on
+  blur (Tab): "2:30" stays, "2" -> "2:00" (bare number = minutes), over 3:00 -> "3:00", under 1:00 -> "1:00", "90s" -> empty.
+  The tool validates 1:00-3:00 and reads the value back after Tab. Clearing a box (fill "" + Tab) returns it to Auto.
+- Model menu (radix `menuitem`s): "Lyria 3.5 Top performing, flagship model", "Lyria 3 Pro Legacy model"; matched by `^<model>(\s|$)`.
+- Credits: sidebar `button "Settings menu"` opens a menu with `menuitem "13190 credits"` (also Log out: never clicked). `readCredits` opens,
+  reads and presses Escape; `music_status` shows `credits` when idle and jobs get `credits_spent` (before minus after).
+  The sidebar diamond (read "3") is not the balance. The menu's balance is read at page load; it is stale until the next
+  navigation/reload, so `readCredits({ fresh: true })` reloads first. One vocal song with lyrics (1:32, Lyria 3.5 default) cost 5 credits (13,190 -> 13,185).
+- `/song/<id>`: no "More options for <title>" and no self-link; `main` has the title (`div role=textbox`), `Remix`, `Share` and
+  an unnamed `button[aria-haspopup=menu]` after Share whose menu is the same (Download submenu by keyboard works).
+  `music_download` uses it when the song is not in the page's list.
+- A vocal song with an empty `Lyrics` box can press Generate (enabled once Sound has text); Flow Music then writes and sings its own lyrics (verified below).
+- A failed or timed-out job writes `~/.flow-music-mcp/debug/music-<time>.json` (an `inspect` dump) and names it in the error.
+
+## Verified live (2026-10-22, FMM-06, three paid songs, 15 credits: 13,190 -> 13,175)
+
+- Vocal song with lyrics (synthpop, 1:32): whisper heard the given lyrics. 5 credits.
+- Vocal song with no lyrics (indie pop, 2:59): Flow Music wrote and sang its own lyrics. 5 credits, measured by the job.
+- Instrumental with Advanced BPM 100, Length 1:30, Seed 42, model Lyria 3.5, WAV: 1:39 long (Length is a target, not exact);
+  the song page shows the Sound text with ", 100 bpm" appended and the lyrics "[Instrumental] [End - 1:30]", so BPM and Length
+  reach the model as text. Seed and model are not shown anywhere. 5 credits.
+- Every song cost 5 credits, whatever its length or kind. `credits_spent` on the job is right once the after-read reloads.
+- `music_download` from `/song/<id>` (a song not in the list): M4A (AAC 48 kHz stereo, 3:01, 3.1 MB) and MP3 (3.7 MB).
+- The song page's Details submenu: Privacy, Link only, Edit details, Go to session, Pin to profile (no BPM or seed shown).
+
+## Mapped live (2026-10-22, FMM-07; test song "FMM Test Vocal Lyrics" 7be13b39-82da-4980-9842-f42cd6fd888f)
+
+- Song menu (row "More options for <title>" or the song page's unnamed button after Share). Submenus open by keyboard
+  (focus the item, ArrowRight, focus the entry, Enter); a pointer moving onto a submenu closes it.
+  - Remix >: Start session, Cover, Replace, Extend, Use prompt, Variation, Trim. Download >: Download video, Get stems, M4A, MP3, WAV.
+    Add to >: Playlist >, Queue.
+- Download video: opens a `dialog` "Pick a template to create your video" with four cards (`div.cursor-pointer`, text only, no role):
+  "Music video" (badge NEW), "Modern", "Player", "Simple"; `Close dialog`. A card posts `POST /__api/video/clip`. The first render
+  took over 3 minutes with no UI (leaving the page stops it); a repeat request returned a `video_url` at once and Chrome began a blob
+  download "<title>.mp4". Simple cost 0 credits; the other three were not tried (cost unknown).
+- Get stems: `GET /__api/stems/clip/<id>`, then nothing (no dialog, no file; balance 13,175 -> 13,174). Probably needs "Split stems"
+  first (not clicked). Not exposed.
+- Remix > Variation: renders at once (5 credits) in a new `/session/<uuid>?t=true`: `Creating "<title> (Remix)"...`, same Sound and
+  Lyrics, a new Seed, then one take `/song/<id>` "<title> (Remix)" (~45 s).
+- Remix > Extend: opens an edit mode in a new `/session?t=true` (nothing rendered yet): `Copy playhead timestamp`, `Copy duration
+  timestamp`, `Close edit mode`, a combobox (COVER, EXTEND, REPLACE), `Settings` (dialog "Extend from" / "Extend until", defaults
+  1:01 and 2:01 for a 1:31 song), textbox `Instruction`, `Edit Lyrics`, `Generate`. Generate rendered "<title> (Extended)" in ~40 s in
+  `/session/<uuid>?t=true`; the song page says "EXTENDED FROM (1:01-2:02)" and "INSTRUCTION ...". 5 credits.
+- Tools built from this (verified live 2026-10-22, see below): `music_remix` (job on the music queue; `music.ts remix`, shares
+  `collectTakes` with `generate`), `music_video` (`downloadVideo`, holds the download lock while it renders), `music_loop`
+  (`src/loop.ts` + `loop-analysis.ts`, local ffmpeg: band-level matching around start/end candidates, crossfaded end into start,
+  checked on a sample WAV and MP3), `loop_friendly` on `music_generate` (wording hint only).
+
+## Verified live (2026-10-22, FMM-07, 10 credits)
+
+- Through the tools: `music_loop` on fmm06-advanced.wav (loop 25.5-82.0 s, seam jump 0.5 dB vs 10.5 dB
+  typical; not judged by ear yet); `music_video` simple on a rendered song (720x1280 h264 + aac, 1:34) and a fresh render
+  (FMM Test Advanced, 1:40 wall time, 1:42 video), 0 credits; `music_remix` variation (1:30, "(Remix)") and extend with an
+  instruction (2:09 from a 1:39 song, "(Extended)"), 5 credits each (13,164 -> 13,154).
+
 ## Not verified yet
 
-- Lyrics (vocal songs), Advanced (BPM, Length format, Seed), the Model menu's options, M4A.
-- What a failed take looks like (`songState` guesses from its text), and an out-of-credits message.
-- The `/song/<id>` page when the song is not in the current list (`music_download` falls back to it).
-- What one song costs.
+- Not run: the "Music video", "Modern" and "Player" video templates; Cover/Replace/Trim; stems.
+- What a failed take looks like (`songState` guesses from its text), and an out-of-credits message (a debug dump is written
+  the first time one happens).
+- Lyria 3 Pro (the legacy model) in a run.
 
 ## Flow UI map (2026-10-22, PRO plan, flow.google.com, mapped live on CDP 9334 in the project "fmm-02-test")
 
@@ -136,3 +194,35 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
 - **Narrate with a Flow voice**: Ingredients mode with a voice from the Voices tab AND any image attached, prompt "They say these exact words and nothing else...", Omni 360p; the take's own sound is the narration (verified: whisper transcribed it exactly, "The little paper boat sails into the morning light."). 4 credits.
 - **Agent video requests** (`flow_agent_images` is images only): the confirm card quotes; first+last-frame chips made the agent choose "Image Interpolation".
 - Status bar quirks: the account button is not on the edit, character or trash views (`flow_status` goes to the grid first); the Google Account link is attached but hidden there.
+
+### FMM-09: live checks (2026-10-22, 33 Flow credits: 1,010 -> 977)
+
+- Direct composer quotes (16:9 x1): Veo 3.1 Lite 10, Fast 20, Quality 100; Omni 1.1 Flash 360p 4 s 4, 720p 4 s 7. Under Veo the
+  popover has no resolution or duration radios: `applySettings` skips them with a note (`modelOptions` in pure.ts).
+- Local `first_frame` (4): the upload tile is titled `fm-<job>-start.jpeg`; the clip's first frame is the local image.
+- `chain_previous` (8): the second clip's first frame equals the first clip's last frame (checked visually).
+- Omni 720p 4 s (7): 1280x720, 4.0 s. Veo 3.1 Lite (10): 1280x720, 8.0 s.
+- `flow_continue` likeness with Kai (4): Kai walks into the same classroom and picks up the plane.
+- Bugs found and fixed live: (1) `listProjects` read the home page before its project cards loaded ("Projects: none") -> waits for
+  the first card; (2) a video's key flips from its uuid to `asb:` a while after it finishes, so a clip finished just before a job
+  looked new and got downloaded instead of the job's own clip -> new tiles are found by aligning the before/after grids by
+  position (`locateNew` in pure.ts), and a download whose tile title differs from the expected one fails instead.
+- Not run: a local `last_frame`, the 4K image download.
+
+### FMM-10: local tools verified (2026-10-22, free)
+
+- `flow_assemble`: music bed + two timed `voice_lines` (whisper heard both in order; peak -3 dB), and `dir` + `out` (clips read from one folder, film written to the other).
+- `flow_set_key`: too short, placeholder and a well-formed key Google refuses are all rejected; no key file written.
+- Gemini TTS speaks English, Croatian, German and Spanish (the language follows the text). The free tier refused the 5th request within a minute (429); the error now says to wait a minute.
+- Multilingual whisper (`ggml-large-v3-turbo-q5_0.bin`, 574 MB, plus the 60 MB detector): German and Spanish transcribe word for word; Croatian with `language: "hr"` gives Latin text (one letter off), but auto-detect said "uk" and wrote Cyrillic, so `flow_transcribe` adds a note then. Croatian captions (`hr`, now in `CAPTION_LANGUAGES`) render with diacritics.
+
+### FMM-08: video identity, trouble, cancel (2026-10-22)
+
+- Mapped read-only: a settled video tile has no uuid anywhere; its thumbnail is `img[alt="Generated video thumbnail"]` with `src="https://flow.google.com/asb/<token>"`, and on a real pointer hover the img becomes a `<video>` whose src is the same token plus more characters. The thumbnail URL was the same before and after a page reload (5 tiles); how long it lasts is unknown.
+- Live check: the token stayed the same within seconds and across a reload, but one tile's token changed once within about an hour while four others did not, so a handle can go stale: re-list with `flow_assets` before use. An `asb:` handle that matches nothing errors with that advice; where a title is known, `tileResolver` falls back to it (newest first). Tiles are de-duplicated and diffed by `tileKey` (the asb handle for an id-less video, so two videos with one title are two tiles; `scanGrid`, `scanNew`, `topIds`, the agent's `known` set).
+- Handle `asb:<token>` (`src/flow/pure.ts`): `TILE_JS` returns `thumb`, `tileById` matches `[src*="/asb/<token>"]`, `tileResolver(page, id, title, thumb)` tries id, then asb, then title. `flow_assets` shows `media_id: "asb:<token>"` for video tiles without a uuid; `FlowFile.thumb` is recorded after the download (the token only exists once Flow has re-signed the thumbnail).
+- Trouble: `flowNotice` reads dialogs, alerts, status regions and the banner "Flow is currently experiencing high demand"; `flowTrouble(text)` classifies it ("Flow reports high demand: ..."; refunds are mentioned only when Flow's own text says so). Used when a tile fails or times out (`waitForNewMedia`), in the video-edit poll, and in `waitForAgent` (a reply with "Something went wrong" stops the wait).
+- Cancel: the job checks `cancelled()` right before Start in `runScene`, `runContinue` and `runVideoEdit` ("cancelled before starting (nothing spent)"); after Start the waiter stops with "cancelled; the generation already started in Flow and will finish and be charged there". A runner that returns files after a cancel request ends `done` with the note "finished before the cancel took effect" (`BaseJobQueue.madeSomething`); with no files it is `cancelled`.
+- Failed tiles (direct composer): `retryErrorTile` only presses Retry on a failed tile above the first tile known before Start; the same failed tile is counted once. `runVideoEdit` goes back to the grid and refuses to download when a new `flow-error-tile` appeared (then reopens the edit view to download).
+- Re-ask: `sceneRound` (pure) decides the scenes still to do; three rounds at most; no round after a re-ask that made nothing.
+- Verified live 2026-10-22 (free): `flow_assets` lists all 5 videos with `asb:` ids (two share a title); `flow_download` by `asb:` got the right one of the same-titled pair (different files) and a 4 s 640x360 clip by another; a stale token errors clearly; a queued image job cancelled -> `cancelled`; an image job cancelled just after it started -> "cancelled before starting (nothing spent)". Not seen live: high demand, a failed tile, a cancel after Start, a dropped scene.

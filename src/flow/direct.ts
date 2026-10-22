@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { newestNanoBanana } from "./agent.js";
+import { CANCEL_AFTER_START, CANCEL_BEFORE_START, locateNew, modelOptions, type SnapTile } from "./pure.js";
 import {
   clearBackdrops,
   dismissCookieNotice,
@@ -13,10 +14,13 @@ import {
   openProject,
   pause,
   readAccount,
+  readTiles,
   scanNew,
   scrollToTop,
   tileResolver,
+  tileThumb,
   topIds,
+  troubleText,
   type DlSize,
   type Tile,
 } from "./driver.js";
@@ -127,8 +131,9 @@ async function pickModel(page: Page, model: string): Promise<void> {
   await clearBackdrops(page);
 }
 
-// Applies the scene's settings and returns the credit cost Flow quotes for them (read BEFORE anything is started).
-export async function applySettings(page: Page, s: SceneRun): Promise<number> {
+// Applies the scene's settings and returns the credit cost Flow quotes for them (read BEFORE anything is started), plus a
+// note when options the chosen model lacks (Veo: resolution, duration) were skipped.
+export async function applySettings(page: Page, s: SceneRun): Promise<{ quote: number; ignored?: string }> {
   const framesMode = s.type === "video" && Boolean(s.first_frame || s.last_frame || s.frames_attached);
   await openPopover(page);
   await pickRadio(page, s.type === "image" ? "Image" : "Video");
@@ -136,8 +141,11 @@ export async function applySettings(page: Page, s: SceneRun): Promise<number> {
   if (s.aspect) await pickRadio(page, s.aspect);
   const model = s.model && !/^(nano banana( 2)?|latest)$/i.test(s.model.trim()) ? s.model : s.type === "image" ? "latest" : undefined;
   if (model) await pickModel(page, model);
-  if (s.type === "video" && s.resolution) await pickRadio(page, s.resolution);
-  if (s.type === "video" && s.duration) await pickRadio(page, `${s.duration}s`);
+  // The model shown now decides (an unnamed model keeps whatever the composer last used, maybe Veo).
+  const shown = cleanName(await page.getByRole("button", { name: "Select model family" }).innerText().catch(() => ""));
+  const opts = s.type === "video" ? modelOptions(shown, { resolution: s.resolution, duration: s.duration }) : {};
+  if (opts.resolution) await pickRadio(page, opts.resolution);
+  if (opts.duration) await pickRadio(page, `${opts.duration}s`);
   await pickRadio(page, `x${s.variants}`);
   await pause(page, 700);
   const text = await page.getByRole("link", { name: /credits?$/ }).first().innerText();
@@ -146,7 +154,7 @@ export async function applySettings(page: Page, s: SceneRun): Promise<number> {
   await pause(page, 400);
   await clearBackdrops(page);
   if (Number.isNaN(cost)) throw new Error(`Could not read the credit quote from Flow ("${text}").`);
-  return cost;
+  return { quote: cost, ...(opts.ignored ? { ignored: opts.ignored } : {}) };
 }
 
 // ---- Assets: uploads and pickers ----
@@ -292,10 +300,12 @@ async function progressOf(page: Page): Promise<string | undefined> {
 }
 
 // Flow's own Retry on a failed tile re-renders the same prompt free of charge (direct generations only; agent-made error
-// tiles offer Delete alone).
-async function retryErrorTile(page: Page): Promise<boolean> {
-  const tile = page.locator("flow-grid-tile-container:has(flow-error-tile)").first();
-  if (!(await tile.count())) return false;
+// tiles offer Delete alone). Only a failed tile that is new since the job's start is retried (locateNew).
+async function retryErrorTile(page: Page, before: SnapTile[]): Promise<boolean> {
+  await scrollToTop(page);
+  const index = locateNew(before, await readTiles(page)).errors[0];
+  if (index === undefined) return false;
+  const tile = page.locator("flow-grid-tile-container").nth(index);
   await hoverTile(page, tile);
   const retry = tile.getByRole("button", { name: "Retry" });
   if (!(await retry.waitFor({ state: "visible", timeout: 2500 }).then(() => true, () => false))) return false;
@@ -309,7 +319,7 @@ async function retryErrorTile(page: Page): Promise<boolean> {
 // (fm-...), tiles of the wrong kind (a "Save frame" still in a video job) and tiles still counting up are skipped.
 export async function waitForNewMedia(
   page: Page,
-  before: Set<string>,
+  before: SnapTile[],
   count: number,
   kind: SceneType,
   timeoutMs: number,
@@ -321,7 +331,7 @@ export async function waitForNewMedia(
   let failures = 0;
   while (Date.now() < deadline) {
     await pause(page, 2000);
-    if (hooks.cancelled()) throw new Error("cancelled");
+    if (hooks.cancelled()) throw new Error(CANCEL_AFTER_START);
     const r = await scanNew(page, before);
     const fresh = r.fresh.filter((t) => t.kind === kind && !t.busy);
     const busy = r.fresh.some((t) => t.kind === kind && t.busy);
@@ -334,16 +344,19 @@ export async function waitForNewMedia(
     const pct = await progressOf(page);
     hooks.progress(pct ? `Flow is rendering: ${pct}` : "waiting for Flow");
     if (pct || r.errors === 0) continue;
-    failures += r.errors;
+    // The same failed tile is seen on every poll: count it once (plus one per Retry that failed again).
+    failures = Math.max(failures, retries - retriesLeft + r.errors);
     if (retriesLeft > 0) {
       retriesLeft--;
       hooks.progress("Flow reported a failure, pressing its Retry");
-      if (await retryErrorTile(page)) continue;
+      if (await retryErrorTile(page, before)) continue;
     }
     if (fresh.length) return fresh;
-    throw new Error(`Flow failed this generation ${failures} time(s) ("Sorry, this ${kind} failed to generate"). Nothing was charged. Try again later or reword the prompt.`);
+    const trouble = await troubleText(page);
+    throw new Error(`${trouble ? `${trouble}. ` : ""}Flow failed this generation ${failures} time(s) ("Sorry, this ${kind} failed to generate"). Nothing was charged. Try again later or reword the prompt.`);
   }
-  throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s waiting for Flow to finish. Check flow_assets before generating again: the take may still arrive (and may have been charged).`);
+  const trouble = await troubleText(page);
+  throw new Error(`${trouble ? `${trouble}. ` : ""}Timed out after ${Math.round(timeoutMs / 1000)}s waiting for Flow to finish. Check flow_assets before generating again: the take may still arrive (and may have been charged).`);
 }
 
 const sizeFor = (type: SceneType, quality: "original" | "upscaled"): DlSize => (type === "image" ? (quality === "upscaled" ? "2K" : "1K") : quality);
@@ -370,12 +383,12 @@ export async function runScene(
   const balance = paid ? (await readAccount(page).catch((): { credits?: number } => ({}))).credits : undefined;
   if (paid) await ensureDirectComposer(page);
   progress("applying the settings and reading the quote");
-  const quote = await applySettings(page, s);
+  const { quote, ignored } = await applySettings(page, s);
   if (quote > s.max_credits) {
     throw new Error(`Flow quotes ${quote} credits for this scene, above max_credits=${s.max_credits}. Nothing was generated. Raise max_credits or pick a cheaper model, resolution, duration or variants.`);
   }
   job.note = `quote ${quote} credit(s)`;
-  const notes: string[] = [];
+  const notes: string[] = ignored ? [ignored] : [];
 
   const tag = job.id;
   const framesMode = s.type === "video" && Boolean(s.first_frame || s.last_frame);
@@ -417,7 +430,9 @@ export async function runScene(
   const start = page.getByRole("button", { name: "Start generation" });
   if (!(await start.isEnabled())) throw new Error("Flow's Start generation button is disabled; the prompt or inputs were not accepted.");
   await scrollToTop(page);
-  const before = new Set(await topIds(page));
+  const before = await topIds(page);
+  // Last look before the point of no return.
+  if (hooks.cancelled()) throw new Error(CANCEL_BEFORE_START);
   progress("generating");
   await start.click({ timeout: 6000 });
 
@@ -427,8 +442,10 @@ export async function runScene(
   const files: FlowFile[] = [];
   for (const [i, t] of fresh.entries()) {
     const stem = join(s.output_dir, `${s.file_stem}-${String(number).padStart(2, "0")}${i ? `-v${i + 1}` : ""}`);
-    const saved = await downloadTileAll(page, tileResolver(page, t.id, t.title), stem, sizeFor(s.type, s.download_quality));
-    for (const file of saved) files.push({ scene: number, file, media_id: t.id, title: t.title, variant: files.length + 1 });
+    const saved = await downloadTileAll(page, tileResolver(page, t.id, t.title, t.thumb), stem, sizeFor(s.type, s.download_quality));
+    // The uuid seen at finish time, and the /asb/ token the thumbnail has once Flow re-signed it (videos only).
+    const thumb = s.type === "video" ? t.thumb ?? (await tileThumb(page, tileResolver(page, t.id, t.title))) : undefined;
+    for (const file of saved) files.push({ scene: number, file, media_id: t.id, title: t.title, variant: files.length + 1, ...(thumb ? { thumb } : {}) });
     await pause(page, 1200);
   }
   let spent: number | undefined;

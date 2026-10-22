@@ -4,6 +4,8 @@ import { extractZip } from "./platform.js";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { FLOW_URL, HOME_DIR, inEnglish, withDownloadLock } from "../chrome.js";
+import { mediaExtensionOfBytes } from "../util.js";
+import { flowTrouble, locateNew, mergeView, parseAsbHandle, tileKey, troubleMessage, type SnapTile } from "./pure.js";
 
 // The Google Flow UI driver (flow.google.com), rewritten for the redesigned Flow of 2026-10-22. Ported logic and lessons
 // from flow-mcp (github.com/GTAI-1/flow-mcp, src/flow.ts, ISC per its package.json): the grid is virtual, tiles are found
@@ -21,6 +23,8 @@ export interface Tile {
   title: string;
   kind: TileKind;
   busy: boolean;
+  // The /asb/ token of a video tile's thumbnail (FMM-08), see pure.ts.
+  thumb?: string;
 }
 
 export interface FlowState {
@@ -161,7 +165,9 @@ export async function listProjects(page: Page): Promise<ProjectRef[]> {
   await dismissCookieNotice(page);
   // A signed-in home page always has the New project button, even with no projects at all.
   await page.getByRole("button", { name: "New project" }).waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
-  await pause(page, 1200);
+  // The cards load after the button; wait for the first one (a fresh account has none: the timeout means "no projects").
+  await page.locator(".project-card").first().waitFor({ state: "attached", timeout: 10_000 }).catch(() => {});
+  await pause(page, 600);
   return page.evaluate(() =>
     [...document.querySelectorAll(".project-card")].flatMap((card) => {
       const href = card.querySelector('a[href^="/project/"]')?.getAttribute("href") ?? "";
@@ -187,8 +193,13 @@ export async function openProject(page: Page, project: string | undefined, creat
   let id = UUID.test(project) ? UUID.exec(project)![0] : undefined;
   let name = id ?? project;
   if (!id) {
-    const all = await listProjects(page);
-    const same = all.filter((p) => p.name.toLowerCase() === project.trim().toLowerCase());
+    const find = (all: ProjectRef[]) => all.filter((p) => p.name.toLowerCase() === project.trim().toLowerCase());
+    let same = find(await listProjects(page));
+    // Cards can still be arriving: look once more before deciding the project is missing (or creating a duplicate).
+    if (!same.length) {
+      await pause(page, 2500);
+      same = find(await listProjects(page));
+    }
     if (same.length > 1) throw new Error(`${same.length} Flow projects are called "${project}". Pass the project id instead: ${same.map((p) => p.id).join(", ")}.`);
     if (same[0]) ({ id, name } = same[0]);
   } else {
@@ -258,7 +269,11 @@ const TILE_JS = `(tile) => {
   const media = tile.querySelector("img[data-media-id], video[data-media-id], img[src], video[src]");
   const id = media && (media.getAttribute("data-media-id") || media.getAttribute("src")?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0]);
   const title = tile.getAttribute("aria-label") || "";
+  // Prefer the thumbnail img; a hover <video> has the same token plus more (kept whole, compared by prefix).
+  const thumbSrc = (tile.querySelector('img[alt="Generated video thumbnail"]') || tile.querySelector("video[src]"))?.getAttribute("src");
+  const thumb = thumbSrc?.match(/\\/asb\\/([^/?#"'\\s]+)/)?.[1];
   return {
+    thumb,
     id: id || (title ? "title:" + title : ""),
     title,
     kind: tile.querySelector("flow-scene-tile") ? "scene" : tile.querySelector("flow-video-tile") ? "video" : tile.querySelector("flow-image-tile") ? "image" : "other",
@@ -278,43 +293,48 @@ export async function readTiles(page: Page): Promise<RawTile[]> {
   );
 }
 
-export const tileById = (page: Page, id: string): Locator =>
-  page
+// "title:<t>" (id-less tile), "asb:<token>" (video handle; the src contains /asb/<token>, which also matches a hover <video>
+// whose token is longer) or a media id.
+export const tileById = (page: Page, id: string): Locator => {
+  const asb = parseAsbHandle(id);
+  return page
     .locator(
       id.startsWith("title:")
         ? `flow-grid-tile-container[aria-label="${id.slice(6).replace(/"/g, '\\"')}"]`
-        : `flow-grid-tile-container:has([data-media-id="${id}"]), flow-grid-tile-container:has([src*="${id}"])`,
+        : asb
+          ? `flow-grid-tile-container:has([src*="/asb/${asb}"])`
+          : `flow-grid-tile-container:has([data-media-id="${id}"]), flow-grid-tile-container:has([src*="${id}"])`,
     )
     .first();
+};
 
-// Ids of the tiles on screen at the top of the grid: the "before" picture of a generation.
-export async function topIds(page: Page): Promise<string[]> {
+// The tiles on screen at the top of the grid: the "before" picture of a generation.
+export async function topIds(page: Page): Promise<SnapTile[]> {
   await scrollToTop(page);
-  return (await readTiles(page)).map((t) => t.id).filter(Boolean);
+  return (await readTiles(page)).map(({ id, thumb, title, error }) => ({ id, thumb, title, error }));
 }
 
-// New tiles appear at the top of an All-media grid sorted Newest, so a scan from the top stops at the first tile that
-// existed before. Freshness is by media id, never by title: the agent reuses titles (flow-mcp lesson, 2026-09-20), and an
-// agent edit of a reference image gives the tile a new id under the same title (seen 2026-10-22).
-export async function scanNew(page: Page, before: Iterable<string>, full = false): Promise<{ fresh: Tile[]; errors: number }> {
-  const known = new Set(before);
+// New tiles appear at the top of an All-media grid sorted Newest. Which ones are new is decided by position against the
+// snapshot (locateNew), not by one key: a video's key flips from uuid to /asb/ token after it lands. Titles repeat, so
+// they only break ties. An agent edit of a reference image (new media id, same slot) still counts as new.
+export async function scanNew(page: Page, before: SnapTile[], full = false): Promise<{ fresh: Tile[]; errors: number }> {
   await scrollToTop(page);
-  const fresh = new Map<string, Tile>();
-  let errors = 0;
+  let all: RawTile[] = [];
+  let found = locateNew(before, all);
   for (let step = 0; step < 200; step++) {
-    const tiles = await readTiles(page);
-    const firstKnown = tiles.findIndex((t) => t.id && known.has(t.id));
-    // Failed tiles have no id; only the ones above the first known tile of this view are new (notes only).
-    errors = Math.max(errors, tiles.slice(0, firstKnown < 0 ? undefined : firstKnown).filter((t) => t.error).length);
-    for (const t of tiles) {
-      if (t.error || !t.id || known.has(t.id) || t.title.startsWith("fm-")) continue;
-      fresh.set(t.id, { id: t.id, title: t.title, kind: t.kind, busy: t.busy });
-    }
-    if (firstKnown >= 0 && !full) break;
+    all = mergeView(all, await readTiles(page));
+    found = locateNew(before, all);
+    if (!full && found.anchored && found.overlap >= Math.min(before.length, 4)) break;
     if (!(await scrollDown(page))) break;
   }
   await scrollToTop(page);
-  return { fresh: [...fresh.values()], errors };
+  const fresh: Tile[] = [];
+  for (const i of found.fresh) {
+    const t = all[i]!;
+    if (t.error || !t.id || t.title.startsWith("fm-")) continue;
+    fresh.push({ id: t.id, title: t.title, kind: t.kind, busy: t.busy, thumb: t.thumb });
+  }
+  return { fresh, errors: found.errors.length };
 }
 
 // The whole grid, every tile once (by id, or by title for id-less tiles). Walks down the virtual list.
@@ -322,7 +342,7 @@ export async function scanGrid(page: Page, stopAt?: (tiles: Tile[]) => boolean):
   await scrollToTop(page);
   const seen = new Map<string, Tile>();
   for (let step = 0; step < 300; step++) {
-    for (const t of await readTiles(page)) if (t.id && !seen.has(t.id)) seen.set(t.id, { id: t.id, title: t.title, kind: t.kind, busy: t.busy });
+    for (const t of await readTiles(page)) if (t.id && !seen.has(tileKey(t))) seen.set(tileKey(t), { id: t.id, title: t.title, kind: t.kind, busy: t.busy, thumb: t.thumb });
     if (stopAt?.([...seen.values()])) break;
     if (!(await scrollDown(page))) break;
   }
@@ -341,7 +361,11 @@ export async function findTile(page: Page, id: string): Promise<Locator> {
     }
     if (!(await scrollDown(page))) break;
   }
-  throw new Error(`The tile ${id} is not in the open project's grid (trashed, or another project is open). Use flow_assets to list what is there.`);
+  throw new Error(
+    parseAsbHandle(id)
+      ? `No tile matches ${id}. The asb: handle may have gone stale (Flow can change a video's token after a while), or the video was trashed or is in another project. Run flow_assets again and use the new media_id.`
+      : `The tile ${id} is not in the open project's grid (trashed, or another project is open). Use flow_assets to list what is there.`,
+  );
 }
 
 // Flow reveals a tile's toolbar for a genuine pointer move only; Playwright's hover() does not trigger it.
@@ -415,14 +439,7 @@ export function extensionOf(file: string): string {
   } finally {
     closeSync(fd);
   }
-  const ascii = (from: number, to: number) => head.subarray(from, to).toString("latin1");
-  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return ".jpeg";
-  if (head[0] === 0x89 && ascii(1, 4) === "PNG") return ".png";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return ".webp";
-  if (ascii(4, 8) === "ftyp") return ".mp4";
-  if (ascii(0, 4) === "GIF8") return ".gif";
-  if (head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04) return ".zip";
-  return ".bin";
+  return mediaExtensionOfBytes(head);
 }
 
 // Image download submenu (2026-10-22): "1K Original size", "2K Upscaled", "4K Upscaled".
@@ -506,15 +523,52 @@ async function downloadTileNow(page: Page, resolve: () => Promise<Locator>, stem
 // Re-finds the tile on every attempt: the virtual grid may have unmounted it between steps.
 // A finished video's thumbnail is re-signed (/asb/ URL without the uuid) a little after it lands, so a video tile is also found
 // by its title (the newest tile with that title, which is the first in the grid) when its id no longer resolves.
-export const tileResolver = (page: Page, id: string, title?: string) => async (): Promise<Locator> => {
+// An asb: handle is tried before the title: it names the video, the title does not.
+// With a title given, a tile of another title is never returned: that would download the wrong media (seen 2026-10-22).
+export const tileResolver = (page: Page, id: string, title?: string, thumb?: string) => async (): Promise<Locator> => {
+  const checked = async (tile: Locator): Promise<Locator> => {
+    const label = (await tile.getAttribute("aria-label").catch(() => null)) ?? "";
+    if (title && label && label !== title) throw new Error(`Found the tile "${label}" where "${title}" was expected; not downloading it.`);
+    return tile;
+  };
   const tile = tileById(page, id);
-  if (await tile.count()) return tile;
+  if (await tile.count()) return checked(tile);
+  if (thumb) {
+    const byThumb = tileById(page, `asb:${thumb}`);
+    if (await byThumb.count()) return checked(byThumb);
+  }
   if (title) {
     const byTitle = page.locator(`flow-grid-tile-container[aria-label="${title.replace(/"/g, '\\"')}"]`).first();
     if (await byTitle.count()) return byTitle;
   }
-  return findTile(page, id);
+  return checked(await findTile(page, thumb && !parseAsbHandle(id) && id.startsWith("title:") ? `asb:${thumb}` : id));
 };
+
+// The /asb/ token of a video tile as it is now (after Flow re-signed the thumbnail), or undefined (an image, or not found).
+export async function tileThumb(page: Page, resolve: () => Promise<Locator>): Promise<string | undefined> {
+  try {
+    const tile = await resolve();
+    return ((await tile.evaluate((el, js) => (eval(js) as (t: Element) => RawTile)(el), TILE_JS)) as RawTile).thumb || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// What Flow shows on the page about trouble: dialogs and alerts, and the high-demand banner (found by its text).
+export async function flowNotice(page: Page): Promise<{ alerts: string; banner: string }> {
+  const alerts = await page
+    .evaluate(() => [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="alert"], [role="status"]')].map((el) => (el as HTMLElement).innerText.replace(/\s+/g, " ").trim()).filter(Boolean).join(" | "))
+    .catch(() => "");
+  const banner = await page.getByText(/experiencing high demand/i).first().innerText({ timeout: 1500 }).catch(() => "");
+  return { alerts, banner: banner.replace(/\s+/g, " ").trim() };
+}
+
+// One line for an error message: the banner (high demand) first, then a failing alert; "" when Flow says nothing of the sort.
+export async function troubleText(page: Page): Promise<string> {
+  const n = await flowNotice(page);
+  const t = flowTrouble(n.banner) ?? flowTrouble(n.alerts);
+  return t ? troubleMessage(t) : "";
+}
 
 // ---- Assets, trash, debugging ----
 
