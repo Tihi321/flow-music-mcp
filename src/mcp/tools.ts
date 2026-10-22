@@ -1,7 +1,7 @@
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp } from "../chrome.js";
-import { downloadSong, generate, inspect, listSongs, signedIn, withPage, type AudioFormat } from "../music.js";
+import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, closedWindowError, withSitePage } from "../chrome.js";
+import { downloadSong, generate, inspect, listSongs, signedIn, type AudioFormat } from "../music.js";
 import { buildLocalFlowTools } from "../flow/local-tools.js";
 import { buildFlowTools } from "../flow/tools.js";
 import { JobQueue, type Job } from "../queue.js";
@@ -71,11 +71,13 @@ function buildMusicTools(): Tool[] {
   });
 
   const queue = new JobQueue((job) =>
-    withPage((page) =>
+    withSitePage("music", (page) =>
       generate(page, job.params, (note) => {
         job.progress = note;
       }),
-    ),
+    ).catch((err) => {
+      throw closedWindowError("music", err);
+    }),
   );
 
   const settle = async (job: Job, waitS: number | undefined) => {
@@ -93,9 +95,11 @@ function buildMusicTools(): Tool[] {
       z.object({}),
       async () => {
         const chrome = await cdpUp();
-        const signed = chrome ? await withPage((page) => signedIn(page)) : undefined;
+        const busy = queue.busy;
+        const signed = chrome && !busy ? await withSitePage("music", (page) => signedIn(page)) : undefined;
         return {
           chrome_running: chrome,
+          ...(busy ? { note: "A song is being made; the page was not touched, so signed_in was not checked." } : {}),
           signed_in: signed,
           cdp_port: CDP_PORT,
           profile: PROFILE_DIR,
@@ -153,12 +157,12 @@ function buildMusicTools(): Tool[] {
         await queue.wait(ids, a.timeout_seconds * 1000);
         const jobs = ids.map((id) => {
           const job = queue.get(id);
-          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Not a job of this server process (it may have restarted). Check music_songs." };
+          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Unknown job id (jobs are kept for the last 200 per server, so it may be older or from another install). Check music_songs." };
         });
         return { finished: jobs.every((j) => !["queued", "running"].includes(j.status)), jobs };
       },
     ),
-    def("music_jobs", "Every job of this server process with its status, songs and files.", z.object({}), async () => ({
+    def("music_jobs", "The recent jobs (kept across server restarts, last 200) with their status, songs and files.", z.object({}), async () => ({
       paused: queue.pausedReason ?? undefined,
       jobs: queue.list().map(jobView),
     })),
@@ -182,19 +186,19 @@ function buildMusicTools(): Tool[] {
       "Downloads an existing Flow Music song by id (from music_songs, a job, or a flowmusic.app/song/<id> link). Spends no credits.",
       z.object({ song_id: z.string().min(8), format, out, name: z.string().optional().describe("File name stem (default: the song id)") }),
       async (a) =>
-        withPage((page) => downloadSong(page, a.song_id, a.format as AudioFormat, join(a.out ?? DEFAULT_OUT, slug(a.name ?? a.song_id)))),
+        withSitePage("music", (page) => downloadSong(page, a.song_id, a.format as AudioFormat, join(a.out ?? DEFAULT_OUT, slug(a.name ?? a.song_id)))),
     ),
     def(
       "music_songs",
       "The newest songs in the user's Flow Music library (Songs page): id, title and link.",
       z.object({ limit: z.number().int().min(1).max(200).default(30) }),
-      async (a) => ({ songs: await withPage((page) => listSongs(page, a.limit)) }),
+      async (a) => ({ songs: await withSitePage("music", (page) => listSongs(page, a.limit)) }),
     ),
     def(
       "music_inspect",
       "Debugging: every visible control on the Flow Music page (role, name, placeholder, link) plus any dialog text. Use it to remap a selector after Flow Music changes its UI.",
       z.object({}),
-      async () => withPage((page) => inspect(page)),
+      async () => withSitePage("music", (page) => inspect(page)),
     ),
   ];
 }

@@ -33,7 +33,7 @@ claude mcp add --transport http flow-music-mcp http://127.0.0.1:7462/mcp
 | `music_songs` | Newest songs in your library | no |
 | `music_inspect` | Every visible control on the page, for fixing selectors | no |
 
-A generation runs as a job: the call waits up to `wait` seconds (default 30) and otherwise returns a job id for `music_wait`. Jobs run one at a time with a 20-45 s pause between them.
+A generation runs as a job: the call waits up to `wait` seconds (default 30) and otherwise returns a job id for `music_wait`. Jobs run one at a time with a 20-45 s pause between them. Jobs (Flow Music and Flow, the last 200 of each) are saved in `~/.flow-music-mcp/jobs.json`, so job ids and finished files survive a restart; a job that was queued or running at the time comes back as failed (never resumed on its own, since it could spend credits again) and `*_retry` runs it again. If the Chrome window is closed during a job, the job fails with a message saying so; it reopens on the next call.
 
 ## Keys and settings
 

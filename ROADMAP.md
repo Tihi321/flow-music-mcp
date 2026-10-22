@@ -61,9 +61,9 @@ What flow-music-mcp still lacks, found while building and testing it. Most impor
 - ~~No automated tests.~~ Done in FMM-04: `yarn test` (vitest) covers the pure parts (`matchScenes`,
   `newestNanoBanana`, `capOf`, key parsing, file-type sniffing, caption alignment and layout, `slug`, queue pacing,
   song row text). Live tests stay manual because they can spend credits.
-- **Jobs live in memory**, so a restart forgets job ids (the files stay). Persist them to `~/.flow-music-mcp/jobs.json`.
+- ~~Jobs live in memory.~~ Done in FMM-05: both queues are saved to `~/.flow-music-mcp/jobs.json` (last 200 each); a job queued or running at a restart comes back failed, never resumed (verified live 2026-10-22).
 - **When Google changes a UI:** map it first with `flow_inspect` / `music_inspect`, or the Claude in Chrome extension on the user's own browser (signed in to the same account), then update `CLAUDE.md` with the date and fix on a branch.
-- **Chrome recovery.** A closed Flow/Music window or a Chrome crash mid-job is not handled or tested.
+- **Chrome recovery.** FMM-05: a closed tab or Chrome quitting mid-job fails the job with a clear message and the next call reopens the tab (closed Flow tab verified live 2026-10-22). Not tried: killing Chrome itself mid-job (same reconnect path in `getBrowser`).
 - **The repo name.** It now covers Flow too. A rename (for example `google-flow-mcp`) would touch the hub's `services.json`, `.mcp.json`, README and skill, and the `FLOW_MUSIC_MCP_*` names. Optional.
 
 ## Later

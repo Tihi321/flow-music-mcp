@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, withSitePage } from "../chrome.js";
+import { CDP_PORT, HOME_DIR, PROFILE_DIR, cdpUp, closedWindowError, withSitePage } from "../chrome.js";
 import type { Tool } from "../mcp/tools.js";
 import { runImages } from "./agent.js";
 import { extractAudio, extractLastFrame } from "./chain.js";
@@ -181,6 +181,8 @@ export function buildFlowTools(): Tool[] {
           return made;
         }
       }
+    }).catch((err) => {
+      throw closedWindowError("flow", err);
     }),
   );
   flowQueue = queue;
@@ -369,7 +371,7 @@ export function buildFlowTools(): Tool[] {
         await queue.wait(ids, a.timeout_seconds * 1000);
         const jobs = ids.map((id) => {
           const job = queue.get(id);
-          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Not a job of this server process (it may have restarted). Check flow_assets: Flow's grid is the honest record." };
+          return job ? jobView(job) : { job_id: id, status: "unknown", note: "Unknown job id (jobs are kept for the last 200 per server, so it may be older or from another install). Check flow_assets: Flow's grid is the honest record." };
         });
         return { finished: jobs.every((j) => !["queued", "running"].includes(j.status)), paused: queue.pausedReason ?? undefined, jobs };
       },
@@ -397,6 +399,7 @@ export function buildFlowTools(): Tool[] {
           if (job.status === "done" && job.failed_scenes.length) {
             const pick = job.failed_scenes.map((n) => job.params.numbers.indexOf(n)).filter((i) => i >= 0);
             job.failed_scenes = [];
+            queue.save();
             jobs.push(queue.add({ ...job.params, scenes: pick.map((i) => job.params.scenes[i]!), numbers: pick.map((i) => job.params.numbers[i]!), label: `retry of ${job.id}` }));
             continue;
           }

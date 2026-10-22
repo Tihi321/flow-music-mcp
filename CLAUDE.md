@@ -5,7 +5,7 @@ MCP server (Streamable HTTP on 127.0.0.1:7462, TypeScript) that drives Google Fl
 (`C:\projects\Personal\flow-mcp`, github.com/GTAI-1/flow-mcp), which drives Google Flow; read its CLAUDE.md for lessons
 that apply here too (download folder, pacing, virtual lists, never two CDP clients on one Chrome).
 
-- `src/chrome.ts` launch/attach Chrome, `getPage(site)`, per-site lock · `src/music.ts` Flow Music UI driver · `src/queue.ts` paced job queue ·
+- `src/chrome.ts` launch/attach Chrome, `getPage(site)`, per-site lock · `src/music.ts` Flow Music UI driver · `src/jobs.ts` generic paced job queue with `jobs.json` persistence (`src/queue.ts` music, `src/flow/queue.ts` Flow subclasses) ·
   `src/flow/` Google Flow: `driver.ts`, `agent.ts`, `queue.ts`, `tools.ts` (see "Flow UI map") ·
   `src/mcp/tools.ts` the MCP tools · `src/mcp/http.ts` + `server.ts` transport (copied from comfy-mcp) · `src/login.ts`
 - Build `yarn build`; run `node dist/index.js`; sign in once with `yarn login`. Settings and keys: `.env` (see `.env.example`).

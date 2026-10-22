@@ -59,6 +59,8 @@ async function launchChrome(): Promise<void> {
 
 export async function getBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
+  // Chrome quit or the connection dropped: forget it, so this call reconnects (or relaunches Chrome).
+  browser = null;
   if (!(await cdpUp())) await launchChrome();
   browser = await chromium.connectOverCDP(CDP_URL);
   return browser;
@@ -114,12 +116,25 @@ export function getMusicPage(): Promise<Page> {
 }
 
 // One action at a time per site: Flow must not block Music and the other way round, but two actions on one tab would
-// click over each other. (music.ts keeps its own `withPage` chain for the music tab.)
+// click over each other.
 const chains: Record<Site, Promise<unknown>> = { flow: Promise.resolve(), music: Promise.resolve() };
 export function withSitePage<T>(site: Site, fn: (page: Page) => Promise<T>): Promise<T> {
   const run = chains[site].then(async () => fn(await getPage(site)));
   chains[site] = run.catch(() => {});
   return run;
+}
+
+// Playwright's errors when the tab, its context or Chrome went away under a running action.
+const CLOSED = /(page|context|browser|target).{0,40}has been closed|target closed|browser has been disconnected|browser.{0,20}disconnected/i;
+
+// For a job runner's catch: a closed-window error becomes a clear message, any other error is returned unchanged.
+export function closedWindowError(site: Site, err: unknown): unknown {
+  const text = err instanceof Error ? err.message : String(err);
+  if (!CLOSED.test(text)) return err;
+  const name = site === "flow" ? "Flow" : "Flow Music";
+  return new Error(
+    `The ${name} window was closed (or Chrome quit) while the job ran. It reopens on the next call; check the site before retrying, the generation may have finished there.`,
+  );
 }
 
 // Downloads of both sites share ~/.flow-music-mcp/downloads and Chrome's browser-wide download setting, and each one

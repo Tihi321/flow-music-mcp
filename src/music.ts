@@ -2,7 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rena
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
-import { HOME_DIR, MUSIC_URL, getMusicPage, withDownloadLock } from "./chrome.js";
+import { HOME_DIR, MUSIC_URL, withDownloadLock } from "./chrome.js";
 import { audioExtensionOfBytes, classifySongText, renderingNote } from "./util.js";
 
 // The Flow Music UI driver. Every selector here was mapped from the live page (see CLAUDE.md, "UI map"); never guess one.
@@ -34,14 +34,6 @@ export interface Song {
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const songUrl = (id: string) => new URL(`song/${id}`, MUSIC_URL).toString();
-
-// One Chrome tab, one action at a time: a status check must not click around in the middle of a generation.
-let chain: Promise<unknown> = Promise.resolve();
-export function withPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
-  const run = chain.then(async () => fn(await getMusicPage()));
-  chain = run.catch(() => {});
-  return run;
-}
 
 // Signed in, the left sidebar links to the library. Signed out, it does not.
 export async function signedIn(page: Page): Promise<boolean> {
