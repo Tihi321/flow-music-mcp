@@ -26,7 +26,7 @@ claude mcp add --transport http flow-music-mcp http://127.0.0.1:7462/mcp
 | Tool | What it does | Credits |
 |---|---|---|
 | `music_status` | Chrome up, signed in, folders, job queue | no |
-| `music_generate` | Compose → Generate → wait → download the takes (`<name>-a`, `<name>-b`) | **yes** |
+| `music_generate` | Compose → Generate → wait → download the take (`<name>.mp3|wav|m4a`, about a minute) | **yes** |
 | `music_wait` | Waits for jobs (≤ 50 s per call) | no |
 | `music_jobs`, `music_cancel`, `music_retry` | The queue | retry: yes |
 | `music_download` | Downloads an existing song by id | no |
@@ -48,4 +48,4 @@ A generation runs as a job: the call waits up to `wait` seconds (default 30) and
 
 ## Status
 
-Mapped from the live site on 2026-10-22 without generating anything. The server starts and answers MCP. The generate, wait and download path has not been run against Flow Music yet; `CLAUDE.md` lists what is still unverified.
+Run end to end against Flow Music on 2026-10-22: an instrumental generated and downloaded as WAV in 46 s, and an existing song downloaded as MP3. Lyrics, the Advanced settings and the model menu are not tried yet; `CLAUDE.md` lists what is verified and what is not.

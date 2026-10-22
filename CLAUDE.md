@@ -42,14 +42,31 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
   - No credit quote is shown before Generate.
 - Song rows (in a session thread): link `/song/<uuid>` with the title, `Play <title>`, `Remix <title>`,
   `Download video for <title>`, `Share link for <title>`, `Like`, `Dislike`, `More options for <title>`.
-  One request made two takes with the same title.
+  The Producer chat made two takes with the same title; Compose makes one.
 - `More options` menu: Remix ›, Details ›, Download › (Download video, Get stems, M4A, MP3, WAV), Share..., Add to...,
   Split stems, Report, Delete.
 
-## Not verified yet (needs one paid generation)
+## Verified live (2026-10-22, two paid instrumental generations)
 
-- That Compose's Generate puts the two takes into the session thread as song rows (assumed).
-- How a take looks while it renders, and when it fails (`songState` guesses: a percentage, a progress bar, or words).
-- That MP3/WAV/M4A download as files through Chrome's download, and how long WAV takes.
-- The Model menu's options, the Length format, and the `/song/<id>` page layout (`music_download` for older songs).
-- What one song costs, and whether the sidebar diamond is the credit balance.
+- Compose's Generate makes ONE take in the session thread. While it renders, `<main>` shows `Creating "<title>"...`,
+  a Sound card, and a row "NN% Generating <title>..." with no song link; the link `/song/<uuid>` appears when it is done.
+  Both takes took under a minute (2:40 and 2:58 of audio). The finished take starts playing by itself (row button
+  `Pause <title>`); the driver pauses it.
+- On a brand-new `/session`, the first Generate press only created the session and rendered nothing (no song, no credits).
+  A press on an existing session posted `POST /__api/producer/tool-call` and started at once. The driver presses a second
+  time only when nothing renders 20 s after the first; the second end-to-end run (fresh session) made exactly one song.
+- Download: a pointer moving from `Download` to its submenu closes the submenu ("<html> intercepts pointer events"), so
+  the driver uses the keyboard: focus `Download`, ArrowRight, focus `MP3`/`WAV`/`M4A`, Enter. Chrome fetches
+  `GET /__api/download/audio/<id>?format=mp3`. MP3: 3 MB, 48 kHz stereo, ~150 kb/s, cover art embedded, in ~6 s.
+  WAV: pcm_s16le 48 kHz stereo, 35 MB for 2:58.
+- `music_songs` (Songs page) and `music_download` from that page both work. Next.js's route announcer is a
+  `role="alert"` holding the page title; `pageNotice` ignores it.
+- A Google cookie notice ("Hide") sits at the bottom; it does not block anything and is left alone.
+- The sidebar diamond read 2 before and after both generations, so it is probably not the credit balance.
+
+## Not verified yet
+
+- Lyrics (vocal songs), Advanced (BPM, Length format, Seed), the Model menu's options, M4A.
+- What a failed take looks like (`songState` guesses from its text), and an out-of-credits message.
+- The `/song/<id>` page when the song is not in the current list (`music_download` falls back to it).
+- What one song costs.

@@ -106,7 +106,7 @@ export function buildTools(): Tool[] {
     ),
     def(
       "music_generate",
-      "Makes a song in Flow Music's Compose panel and downloads its takes (usually two, saved as <name>-a and <name>-b). SPENDS FLOW MUSIC CREDITS: ask the user before the first one. Give lyrics with section tags ([Verse], [Chorus]...) or instrumental: true. BPM, length, seed and model switch on Compose's Advanced mode. Returns the files, or a job id while it is still running (then music_wait).",
+      "Makes a song in Flow Music's Compose panel and downloads it (Compose makes one take, saved as <name>.<format>; if Flow Music ever returns more they are <name>-a, <name>-b). SPENDS FLOW MUSIC CREDITS: ask the user before the first one. Give lyrics with section tags ([Verse], [Chorus]...) or instrumental: true. BPM, length, seed and model switch on Compose's Advanced mode. Returns the files, or a job id while it is still running (then music_wait).",
       z
         .object({
           sound: z.string().min(1).describe("Sound description: genre, instruments, mood, tempo, production (Compose's Sound box)"),

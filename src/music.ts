@@ -158,21 +158,34 @@ async function chooseModel(page: Page, model: string): Promise<void> {
   await option.click();
 }
 
-// What a dialog or alert on the page says, for error messages (out of credits, a policy refusal...).
+// What a dialog or alert on the page says, for error messages (out of credits, a policy refusal...). Next.js's route
+// announcer is a role="alert" that only repeats the page title, so it is left out.
 async function pageNotice(page: Page): Promise<string> {
-  const texts = await page.locator('[role="dialog"], [role="alertdialog"], [role="alert"], [data-sonner-toast]').allInnerTexts().catch(() => []);
-  return texts.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).join(" | ");
+  const texts = await page
+    .evaluate(() =>
+      [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="alert"], [data-sonner-toast]')]
+        .filter((el) => !el.closest("next-route-announcer"))
+        .map((el) => (el as HTMLElement).innerText),
+    )
+    .catch(() => [] as string[]);
+  const title = await page.title().catch(() => "");
+  return texts.map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && t !== title).join(" | ");
 }
 
-// UNVERIFIED: how a take looks while it renders has not been seen yet (it needs a paid run). This treats a row as busy
-// while it shows a percentage, a progress bar or words like "generating", and as failed when it says so.
+// While a take renders, the session shows `Creating "<title>"...` and a row "NN% Generating <title>..." that has no
+// song link yet; the link appears when the take is done (seen 2026-10-22: ~1 min for an instrumental).
+async function rendering(page: Page): Promise<string | undefined> {
+  const text = ((await page.locator("main").innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  return /(\d+%\s*)?Generating [^.]{0,60}/.exec(text)?.[0] ?? (/Creating "/.test(text) ? "creating" : undefined);
+}
+
+// A finished take's row. A failed one has not been seen yet: this guesses from its text.
 async function songState(page: Page, id: string): Promise<"ready" | "busy" | "failed"> {
   const row = songRow(page, id);
   if (!(await row.count())) return "busy";
   const text = (await row.innerText().catch(() => "")).replace(/\s+/g, " ");
   if (/\bfailed\b|couldn.t|could not|something went wrong/i.test(text)) return "failed";
-  if (/\d+\s*%|generating|creating|queued|in progress|rendering/i.test(text)) return "busy";
-  if (await row.locator('[role="progressbar"]').count()) return "busy";
+  if (/\d+\s*%|generating/i.test(text)) return "busy";
   return "ready";
 }
 
@@ -181,34 +194,52 @@ export async function generate(page: Page, p: ComposeParams, progress: (note: st
   await openCompose(page);
   await fillCompose(page, p);
   const before = new Set(await songIds(page));
+  const generateButton = page.getByRole("button", { name: "Generate", exact: true });
   progress("generating");
-  await page.getByRole("button", { name: "Generate", exact: true }).click();
-
-  // Compose makes two takes. Wait for both rows, or settle for one if the second never shows.
-  let fresh: string[] = [];
-  let firstSeen = 0;
-  const appearBy = Date.now() + 180_000;
-  while (Date.now() < appearBy) {
-    fresh = (await songIds(page)).filter((id) => !before.has(id));
-    if (fresh.length >= 2) break;
-    if (fresh.length && !firstSeen) firstSeen = Date.now();
-    if (firstSeen && Date.now() - firstSeen > 30_000) break;
-    await pause(2000);
-  }
-  if (!fresh.length) {
-    const notice = await pageNotice(page);
-    throw new Error(`Flow Music showed no new song within 3 minutes of Generate.${notice ? ` The page says: ${notice}` : ""}`);
+  await generateButton.click();
+  // On a brand-new /session the first Generate only created the session and rendered nothing (2026-10-22, no credits
+  // spent); a second press started the take. Press again only when nothing has started 20 s later.
+  const started = async (ms: number) => {
+    const by = Date.now() + ms;
+    while (Date.now() < by) {
+      if ((await rendering(page)) || (await songIds(page)).some((id) => !before.has(id))) return true;
+      await pause(1000);
+    }
+    return false;
+  };
+  if (!(await started(20_000))) {
+    if (!(await generateButton.isEnabled().catch(() => false))) {
+      const notice = await pageNotice(page);
+      throw new Error(`Generate did not start and the button is disabled.${notice ? ` The page says: ${notice}` : ""}`);
+    }
+    progress("generating (second press)");
+    await generateButton.click();
+    if (!(await started(30_000))) {
+      const notice = await pageNotice(page);
+      throw new Error(`Flow Music started nothing after two presses of Generate.${notice ? ` The page says: ${notice}` : ""}`);
+    }
   }
   const session = page.url();
 
+  // Wait while anything renders, then a little longer in case a second take follows the first.
+  let fresh: string[] = [];
+  let quietSince = 0;
   const readyBy = Date.now() + 15 * 60_000;
-  let states: Awaited<ReturnType<typeof songState>>[] = [];
   while (Date.now() < readyBy) {
-    states = await Promise.all(fresh.map((id) => songState(page, id)));
-    progress(`takes: ${states.join(", ")}`);
-    if (states.every((s) => s !== "busy")) break;
-    await pause(5000);
+    fresh = (await songIds(page)).filter((id) => !before.has(id));
+    const now = await rendering(page);
+    progress(now ? `rendering: ${now}` : `takes: ${fresh.length}`);
+    if (now) quietSince = 0;
+    else if (fresh.length) {
+      quietSince ||= Date.now();
+      if (Date.now() - quietSince > 8000) break;
+    }
+    await pause(3000);
   }
+  if (!fresh.length) throw new Error(`No take finished within 15 minutes. Session: ${session}`);
+  // A finished take starts playing in the tool's Chrome; stop it.
+  await page.getByRole("button", { name: /^Pause / }).first().click({ timeout: 2000 }).catch(() => {});
+  const states = await Promise.all(fresh.map((id) => songState(page, id)));
   const ready = fresh.filter((_, i) => states[i] === "ready");
   if (!ready.length) throw new Error(`No take finished (${states.join(", ")}). Session: ${session}`);
 
@@ -219,7 +250,8 @@ export async function generate(page: Page, p: ComposeParams, progress: (note: st
     const file = await downloadFromRow(page, id, p.format, join(p.output_dir, stem));
     songs.push({ id, title: await songTitle(page, id), url: songUrl(id), file });
   }
-  return { session, songs };
+  // A new session only gets its /session/<id> address after the first take, so read it again at the end.
+  return { session: page.url(), songs };
 }
 
 // ---- Download ----
@@ -296,16 +328,17 @@ async function downloadFromRow(page: Page, id: string, format: AudioFormat, stem
         const items = await page.locator('[role="menuitem"]').allTextContents();
         throw new Error(items.length ? `The song menu has no Download item. It offered: ${items.map((t) => t.trim()).join(" | ")}` : "The song menu did not open.");
       }
-      await download.hover();
-      await pause(400);
+      // By keyboard: a pointer moving from "Download" to its submenu closes the submenu on the way (2026-10-22).
+      await download.focus();
+      await page.keyboard.press("ArrowRight");
       const item = page.getByRole("menuitem", { name: format.toUpperCase(), exact: true });
-      if (!(await item.waitFor({ state: "visible", timeout: 3000 }).then(() => true, () => false))) await download.click();
       await item.waitFor({ state: "visible", timeout: 5000 });
       if ((await item.getAttribute("aria-disabled")) === "true" || (await item.getAttribute("data-disabled")) !== null)
         throw new Error(`${format.toUpperCase()} is not available for this song yet.`);
       const before = downloadsNow();
-      await item.click();
-      // UNVERIFIED: WAV may be rendered on demand, so it gets more time.
+      await item.focus();
+      await page.keyboard.press("Enter");
+      // MP3 arrived in 6 s (GET /__api/download/audio/<id>?format=mp3). UNVERIFIED: WAV may be rendered on demand.
       const file = await waitForDownloadedFile(before, format === "wav" ? 600_000 : 180_000);
       const target = `${stem}${extensionOf(file) ?? `.${format}`}`;
       mkdirSync(dirname(target), { recursive: true });
