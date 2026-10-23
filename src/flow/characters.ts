@@ -157,16 +157,44 @@ export async function createCharacter(page: Page, c: CharacterInput, castDir: st
     await page.getByRole("button", { name: "Select a voice" }).click({ timeout: 5000 });
     const voices = page.getByRole("listbox", { name: "Asset list" });
     await voices.waitFor({ state: "visible", timeout: 10_000 });
-    const option = voices.getByRole("option", { name: new RegExp(`(^|\\s)${escapeRe(c.voice)}(\\s|$)`, "i") }).first();
-    if (await option.isVisible().catch(() => false)) {
+    // The dialog's list is virtual (only the first ~15 of the 30 voices are rendered), so scroll it, collecting every name,
+    // until the voice shows up or the end is reached (FMM-16).
+    const option = voices.getByRole("option", { name: new RegExp(`(^|[^A-Za-z0-9])${escapeRe(c.voice)}([^A-Za-z0-9]|$)`, "i") }).first();
+    const viewport = page.locator("cdk-virtual-scroll-viewport").filter({ has: voices }).first();
+    const target = (await viewport.count().catch(() => 0)) ? viewport : voices;
+    const texts = new Set<string>();
+    let found = false;
+    await target.evaluate((el) => { (el as HTMLElement).scrollTop = 0; }).catch(() => {});
+    for (let step = 0; step < 60 && !found; step++) {
+      await pause(page, 400);
+      for (const t of await voices.getByRole("option").allInnerTexts().catch(() => [] as string[])) texts.add(t);
+      if (await option.isVisible().catch(() => false)) {
+        found = true;
+        break;
+      }
+      const moved = await target
+        .evaluate((el) => {
+          const e = el as HTMLElement;
+          const before = e.scrollTop;
+          e.scrollTop = before + Math.max(120, e.clientHeight * 0.8);
+          return e.scrollTop !== before;
+        })
+        .catch(() => false);
+      if (!moved) {
+        await pause(page, 400);
+        for (const t of await voices.getByRole("option").allInnerTexts().catch(() => [] as string[])) texts.add(t);
+        found = await option.isVisible().catch(() => false);
+        break;
+      }
+    }
+    if (found) {
       await option.click({ timeout: 5000 });
       // "Customize performance" would turn this into generating a new voice; stock voices only.
       await page.getByRole("button", { name: "Add to character", exact: true }).click({ timeout: 5000 });
       await pause(page, 1000);
     } else {
-      const texts = await voices.getByRole("option").allInnerTexts();
       await page.getByRole("dialog").getByRole("button", { name: "Close" }).click({ timeout: 4000 }).catch(() => page.keyboard.press("Escape"));
-      voiceWarning = voiceNotFoundWarning(c.voice, texts);
+      voiceWarning = voiceNotFoundWarning(c.voice, [...texts]);
     }
   }
 

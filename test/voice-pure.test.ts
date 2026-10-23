@@ -10,6 +10,7 @@ import {
   geminiRateLimited,
   geminiRetrySeconds,
   parseWindowsVoices,
+  hasVoice,
   stockVoiceNames,
   voiceNotFoundWarning,
   textLimitError,
@@ -124,12 +125,19 @@ describe("Flow character voices", () => {
     expect(stockVoiceNames(options)).toEqual(["Achernar", "Aoede", "Charon"]);
     expect(stockVoiceNames([])).toEqual([]);
   });
+  it("de-duplicates names collected over several scroll steps and finds a voice later in the list", () => {
+    const step1 = options.slice(0, 2);
+    const step2 = [options[1] ?? "", options[2] ?? "", "voice_selection Umbriel Male, easy-going"];
+    expect(stockVoiceNames([...step1, ...step2])).toEqual(["Achernar", "Aoede", "Charon", "Umbriel"]);
+    expect(hasVoice(step1, "Umbriel")).toBe(false);
+    expect(hasVoice([...step1, ...step2], "umbriel")).toBe(true);
+    expect(hasVoice(step1, "")).toBe(false);
+  });
   it("warns that an unknown voice was left unset and names the valid ones", () => {
     const msg = voiceNotFoundWarning("Umbriel", options);
-    expect(msg).toMatch(/"Umbriel" is not one of Flow's character voices/);
+    expect(msg).toMatch(/"Umbriel" is not in Flow's character voice list/);
     expect(msg).toMatch(/WITHOUT a voice/);
     expect(msg).toMatch(/Achernar, Aoede, Charon/);
-    expect(msg).toMatch(/Gemini TTS voices/);
     expect(voiceNotFoundWarning("Umbriel", [])).not.toMatch(/character voices: /);
   });
 });

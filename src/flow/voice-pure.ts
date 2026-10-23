@@ -117,17 +117,23 @@ export function geminiRateLimited(detail?: string): string {
 }
 
 // ---- Flow character voices (FMM-16) ----
-// "Select a voice" lists Flow's stock voices as options like "voice_selection Achernar Female, soft, high pitch". The names
-// are only known from the page (15 stock voices, mapped 2026-10-22), not up front, so a wrong name is reported after the
-// character exists. Gemini TTS voices (flow_narrate engine gemini) are a different, longer list: a name from there, such as
-// Umbriel, may not be a Flow character voice.
+// "Select a voice" lists Flow's stock voices as options like "voice_selection Achernar Female, soft, high pitch". The list is
+// a virtual one: only about 15 of the 30 (the Gemini TTS names, alphabetical) are rendered at a time, so the driver scrolls
+// it and collects every option text; names repeat across scroll steps and are de-duplicated here, in order.
 export function stockVoiceNames(optionTexts: string[]): string[] {
-  return optionTexts.map((t) => t.replace(/voice_selection/g, "").replace(/\s+/g, " ").trim().split(" ")[0] ?? "").filter(Boolean);
+  const names = optionTexts.map((t) => t.replace(/voice_selection/g, "").trim().split(/[^A-Za-z0-9]+/)[0] ?? "").filter(Boolean);
+  return names.filter((n, i) => names.indexOf(n) === i);
+}
+
+// Whether the option texts (any scroll step) include the voice, as a whole word, case-insensitive.
+export function hasVoice(optionTexts: string[], voice: string): boolean {
+  const want = voice.trim().toLowerCase();
+  return !!want && stockVoiceNames(optionTexts).some((n) => n.toLowerCase() === want);
 }
 
 export function voiceNotFoundWarning(voice: string, optionTexts: string[]): string {
   const names = stockVoiceNames(optionTexts);
-  return `Voice "${voice}" is not one of Flow's character voices, so the character was made WITHOUT a voice (call flow_character again or pick one in Flow's character editor). ${
-    names.length ? `Flow's character voices: ${names.join(", ")}. ` : ""
-  }Gemini TTS voices (flow_narrate, flow_voices) are a different list.`;
+  return `Voice "${voice}" is not in Flow's character voice list, so the character was made WITHOUT a voice (call flow_character again with another name or pick one in Flow's character editor). ${
+    names.length ? `Flow's character voices (the whole scrolled list): ${names.join(", ")}. ` : ""
+  }`.trim();
 }
