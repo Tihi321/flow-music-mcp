@@ -6,7 +6,9 @@ import {
   TEXT_MAX,
   formatArgs,
   formatOf,
+  geminiQuotaLimit,
   geminiRateLimited,
+  geminiRetrySeconds,
   parseWindowsVoices,
   textLimitError,
 } from "../src/flow/voice-pure.js";
@@ -93,5 +95,23 @@ describe("Gemini model and errors", () => {
     expect(msg).toMatch(/rate limited/);
     expect(msg).toMatch(/Quota exceeded/);
     expect(geminiRateLimited()).toMatch(/no detail/);
+  });
+  it("says the daily quota is used up when Google's retry time is hours", () => {
+    const text = "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 10, model: gemini-3.8-flash-tts Please retry in 19h56m";
+    expect(geminiRetrySeconds(text)).toBe(19 * 3600 + 56 * 60);
+    expect(geminiQuotaLimit(text)).toBe(10);
+    const msg = geminiRateLimited(text);
+    expect(msg).toMatch(/daily free quota [(]limit 10[)] is used up/);
+    expect(msg).toMatch(/19h 56m/);
+    expect(msg).not.toMatch(/per minute/);
+    expect(msg).toMatch(/Please retry in 19h56m/);
+  });
+  it("keeps the per-minute wording for a short retry time", () => {
+    const msg = geminiRateLimited("Quota exceeded, limit: 10. Please retry in 34.5s.");
+    expect(geminiRetrySeconds("Please retry in 34.5s")).toBe(34.5);
+    expect(msg).toMatch(/only a few requests per minute/);
+    expect(msg).toMatch(/Wait about 35 s and retry/);
+    expect(msg).toMatch(/Please retry in 34[.]5s/);
+    expect(geminiRateLimited("nothing useful")).toMatch(/about a minute/);
   });
 });

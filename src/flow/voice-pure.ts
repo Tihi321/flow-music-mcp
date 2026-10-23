@@ -80,6 +80,38 @@ export function parseWindowsVoices(out: string): WindowsVoice[] {
 }
 
 // ---- Gemini errors ----
+// Google's 429 text carries the quota and a retry time, e.g. "Quota exceeded for metric: ...generate_content_free_tier_requests,
+// limit: 10, model: gemini-3.8-flash-tts ... Please retry in 19h56m" or "Please retry in 34.5s".
+export function geminiRetrySeconds(detail?: string): number | undefined {
+  const m = /retry in[ ]+((?:[0-9]+(?:[.][0-9]+)?[ ]*[dhms][ ]*)+)/i.exec(detail ?? "");
+  if (!m) return undefined;
+  let total = 0;
+  for (const part of (m[1] ?? "").matchAll(/([0-9]+(?:[.][0-9]+)?)[ ]*([dhms])/gi)) total += Number(part[1] ?? 0) * { d: 86400, h: 3600, m: 60, s: 1 }[(part[2] ?? "s").toLowerCase() as "d" | "h" | "m" | "s"];
+  return total;
+}
+
+export function geminiQuotaLimit(detail?: string): number | undefined {
+  const m = /limit:[ ]*([0-9]+)/i.exec(detail ?? "");
+  return m ? Number(m[1]) : undefined;
+}
+
+function waitText(seconds: number): string {
+  if (seconds >= 3600) {
+    const h = Math.floor(seconds / 3600);
+    const min = Math.round((seconds % 3600) / 60);
+    return min ? `${h}h ${min}m` : `${h}h`;
+  }
+  if (seconds >= 60) return `${Math.round(seconds / 60)} min`;
+  return `${Math.ceil(seconds)} s`;
+}
+
 export function geminiRateLimited(detail?: string): string {
-  return `Gemini TTS rate limited (HTTP 429): the free tier allows only a few requests per minute. Wait about a minute and retry. Google says: ${detail ?? "no detail"}`;
+  const says = `Google says: ${detail ?? "no detail"}`;
+  const seconds = geminiRetrySeconds(detail);
+  if (seconds !== undefined && seconds >= 3600) {
+    const limit = geminiQuotaLimit(detail);
+    return `Gemini TTS rate limited (HTTP 429): the daily free quota${limit !== undefined ? ` (limit ${limit})` : ""} is used up; it resets in about ${waitText(seconds)}. Waiting a minute will not help: use engine "windows" meanwhile, or try again after the reset. ${says}`;
+  }
+  const wait = seconds !== undefined ? `about ${waitText(seconds)}` : "about a minute";
+  return `Gemini TTS rate limited (HTTP 429): the free tier allows only a few requests per minute. Wait ${wait} and retry. ${says}`;
 }
