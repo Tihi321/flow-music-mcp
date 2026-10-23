@@ -598,13 +598,13 @@ export function buildFlowTools(): Tool[] {
     ),
     def(
       "flow_character",
-      "Creates a reusable Flow character (free: Nano Banana draws the portrait). Give `describe` (Flow draws the portrait straight into the character editor) or `image` (an absolute path, or 'asset:<title>' of an image in the project); then it is named, given a stock voice and a personality, and the portrait is saved to <out>/_cast/<name>.jpeg. Use it afterwards as reference_images ['asset:<name>'].",
+      "Creates a reusable Flow character (free: Nano Banana draws the portrait). Give `describe` (Flow draws the portrait straight into the character editor) or `image` (an absolute path, or 'asset:<title>' of an image in the project); then it is named, given a stock voice and a personality (the voice must be one of Flow's character voices, the same names as the Gemini voices of flow_voices such as Aoede, Charon or Umbriel; the dialog's list is scrolled to find it; an unknown name is not applied, the character is still made without a voice, and the result carries `voice_warning` naming the voices Flow lists), and the portrait is saved to <out>/_cast/<name>.jpeg. Use it afterwards as reference_images ['asset:<name>'].",
       z.object({
         name: z.string().min(1).max(60),
         describe: z.string().max(1200).optional().describe("What the character looks like (a full-body description works best)."),
         image: z.string().min(1).optional().describe("Existing picture instead of `describe`: absolute path, or 'asset:<title>'."),
         personality: z.string().max(500).optional().describe("How the character acts; Flow's agent uses it when crafting scenes."),
-        voice: z.string().optional().describe("Stock voice name from flow_voices' list of Flow voices, e.g. 'Aoede' (female, breezy) or 'Charon' (male, informative)."),
+        voice: z.string().optional().describe("Flow character voice (a name in the character editor's 'Select a voice' list, e.g. a Gemini voice name from flow_voices), e.g. 'Aoede' (female, breezy) or 'Charon' (male, informative)."),
         project,
         create_project: createProject,
         out,

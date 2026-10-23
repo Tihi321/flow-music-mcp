@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { newestNanoBanana } from "./agent.js";
-import { CANCEL_AFTER_START, CANCEL_BEFORE_START, locateNew, modelOptions, type SnapTile } from "./pure.js";
+import { CANCEL_AFTER_START, CANCEL_BEFORE_START, locateNew, modelOptions, pickerSearchText, pickerTitle, type SnapTile } from "./pure.js";
 import {
   clearBackdrops,
   dismissCookieNotice,
@@ -101,6 +101,27 @@ async function openPopover(page: Page): Promise<void> {
   if (!(await probe.isVisible().catch(() => false))) throw new Error("Could not open Flow's generation settings popover.");
 }
 
+// The settings popover does not always close on one Escape and has no showing backdrop (found 2026-10-23, HUB-07 live run:
+// it stayed over the prompt box and `.ProseMirror` clicks timed out). Escape, then the trigger button as a toggle, at most
+// 3 rounds, then the backdrop clearer; throws when it is still open.
+export async function closePopover(page: Page): Promise<void> {
+  const probe = page.getByRole("radio", { name: word("Image") });
+  const open = () => probe.isVisible().catch(() => false);
+  const hidden = () => probe.waitFor({ state: "hidden", timeout: 1500 }).then(() => true, () => false);
+  for (let attempt = 0; attempt < 3 && (await open()); attempt++) {
+    await page.keyboard.press("Escape").catch(() => {});
+    if (await hidden()) break;
+    await page.getByRole("button", { name: "Settings trigger" }).click({ timeout: 3000 }).catch(() => {});
+    if (await hidden()) break;
+  }
+  if (await open()) {
+    await clearBackdrops(page);
+    await pause(page, 400);
+  }
+  if (await open()) throw new Error("Flow's generation settings popover did not close.");
+  await clearBackdrops(page);
+}
+
 async function pickRadio(page: Page, label: string): Promise<void> {
   const radio = page.getByRole("radio", { name: word(label) }).first();
   if (!(await radio.isVisible().catch(() => false))) throw new Error(`Flow has no "${label}" option for the current mode/model.`);
@@ -150,9 +171,7 @@ export async function applySettings(page: Page, s: SceneRun): Promise<{ quote: n
   await pause(page, 700);
   const text = await page.getByRole("link", { name: /credits?$/ }).first().innerText();
   const cost = Number(text.match(/\d+/)?.[0] ?? NaN);
-  await page.keyboard.press("Escape");
-  await pause(page, 400);
-  await clearBackdrops(page);
+  await closePopover(page);
   if (Number.isNaN(cost)) throw new Error(`Could not read the credit quote from Flow ("${text}").`);
   return { quote: cost, ...(opts.ignored ? { ignored: opts.ignored } : {}) };
 }
@@ -237,20 +256,61 @@ export async function attachAsset(page: Page, opener: Locator, assetName: string
   };
   await select(firstTab);
   await list.waitFor({ state: "visible", timeout: 10_000 });
-  const optionFor = () => list.getByRole("option", { name: new RegExp(`(^|\\s)${escapeRe(assetName)}`, "i") }).first();
-  let option = optionFor();
-  if (!(await option.isVisible().catch(() => false))) {
+  // The picker's list is virtual (only the newest tiles are rendered), so an older asset is found by typing its title into
+  // `Search assets`, then by scrolling the viewport step by step (FMM-14).
+  const wanted = pickerTitle(assetName);
+  const optionFor = () => list.getByRole("option", { name: new RegExp(`(^|\\s)${escapeRe(wanted)}`, "i") }).first();
+  const search = page.getByRole("textbox", { name: "Search assets" }).first();
+  const seen = (l: Locator) => l.isVisible().catch(() => false);
+  const setSearch = async (text: string) => {
+    if (!(await seen(search))) return false;
+    await search.fill(text, { timeout: 4000 }).catch(() => {});
+    await pause(page, 1200);
+    return true;
+  };
+  const scrollFind = async (): Promise<boolean> => {
+    const viewport = page.locator("cdk-virtual-scroll-viewport").filter({ has: list }).first();
+    const target = (await viewport.count().catch(() => 0)) ? viewport : list;
+    await target.evaluate((el) => { (el as HTMLElement).scrollTop = 0; }).catch(() => {});
+    for (let step = 0; step < 80; step++) {
+      await pause(page, 400);
+      if (await seen(optionFor())) return true;
+      const moved = await target
+        .evaluate((el) => {
+          const e = el as HTMLElement;
+          const before = e.scrollTop;
+          e.scrollTop = before + Math.max(120, e.clientHeight * 0.8);
+          return e.scrollTop !== before;
+        })
+        .catch(() => false);
+      if (!moved) {
+        await pause(page, 400);
+        return seen(optionFor());
+      }
+    }
+    return false;
+  };
+  const locate = async (): Promise<boolean> => {
+    if (await seen(optionFor())) return true;
+    if (await setSearch(pickerSearchText(assetName))) {
+      if (await seen(optionFor())) return true;
+      if (await scrollFind()) return true;
+      await setSearch("");
+    }
+    return scrollFind();
+  };
+  if (!(await locate())) {
     for (const name of ["All", "Voices", "Characters", "Uploads", "Images", "Videos"]) {
       if (name === firstTab) continue;
       if (!(await tab(name).isVisible().catch(() => false))) continue;
       await select(name);
-      option = optionFor();
-      if (await option.isVisible().catch(() => false)) break;
+      if (await locate()) break;
     }
   }
+  const option = optionFor();
   if (!(await option.waitFor({ state: "visible", timeout: 8000 }).then(() => true, () => false))) {
     await page.keyboard.press("Escape");
-    throw new Error(`No asset called "${assetName}" in Flow's picker. Use flow_assets / flow_characters to list names.`);
+    throw new Error(`No asset called "${wanted}" in Flow's picker. Use flow_assets / flow_characters to list names.`);
   }
   await option.click({ timeout: 5000 });
   const add = page.getByRole("button", { name: "Add to prompt", exact: true });
@@ -283,6 +343,7 @@ async function attachNewestImage(page: Page, opener: Locator): Promise<void> {
 // ---- One generation ----
 
 export async function typePrompt(page: Page, prompt: string): Promise<void> {
+  await closePopover(page);
   const box = page.locator(".ProseMirror").last();
   await box.click({ timeout: 6000 });
   await page.keyboard.press("ControlOrMeta+a");

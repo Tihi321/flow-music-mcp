@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asbToken, flowTrouble, locateNew, mergeView, type SnapTile, isVeoModel, modelOptions, VEO_IGNORED_NOTE, newErrorIndexes, parseAsbHandle, sceneRound, tileKey, tileMatchesHandle, troubleMessage } from "../src/flow/pure.js";
+import { asbToken, flowTrouble, locateNew, mergeView, type SnapTile, isVeoModel, modelOptions, VEO_IGNORED_NOTE, newErrorIndexes, optionMatchesTitle, parseAsbHandle, pickerSearchText, pickerTitle, sceneRound, tileKey, tileMatchesHandle, troubleMessage } from "../src/flow/pure.js";
 
 describe("asb handles", () => {
   it("takes the token after /asb/ and stops at ? # /", () => {
@@ -149,5 +149,29 @@ describe("what is new since Start (key flips, repeated titles)", () => {
     const a = [img(1, "A"), img(2, "B"), img(3, "C")];
     const b = [img(3, "C"), img(4, "D")];
     expect(mergeView(a, b).map((t) => t.title)).toEqual(["A", "B", "C", "D"]);
+  });
+});
+
+describe("picker titles (FMM-14)", () => {
+  it("drops a trailing ellipsis and extra spaces", () => {
+    expect(pickerTitle("Mara adjusting oversized yellow …")).toBe("Mara adjusting oversized yellow");
+    expect(pickerTitle("Mara adjusting  oversized yellow...")).toBe("Mara adjusting oversized yellow");
+    expect(pickerTitle("Ferry approaches island lighthouse")).toBe("Ferry approaches island lighthouse");
+    expect(pickerTitle("Wait... what")).toBe("Wait... what");
+  });
+  it("cuts a long search text at a word boundary", () => {
+    const long = "A very long title about a ferry approaching the island lighthouse at dusk in heavy fog";
+    const t = pickerSearchText(long);
+    expect(t.length).toBeLessThanOrEqual(60);
+    expect(long.startsWith(t)).toBe(true);
+    expect(long[t.length]).toBe(" ");
+    expect(pickerSearchText("Short title")).toBe("Short title");
+  });
+  it("matches an option by a prefix of the cleaned title", () => {
+    expect(optionMatchesTitle("Mara adjusting oversized yellow raincoat Image", "Mara adjusting oversized yellow …")).toBe(true);
+    expect(optionMatchesTitle("mara ADJUSTING oversized yellow raincoat Image", "Mara adjusting oversized yellow...")).toBe(true);
+    expect(optionMatchesTitle("voice_selection Aoede Female", "Aoede")).toBe(true);
+    expect(optionMatchesTitle("Ferry approaches island lighthouse Image", "Mara adjusting")).toBe(false);
+    expect(optionMatchesTitle("Anything Image", "")).toBe(false);
   });
 });

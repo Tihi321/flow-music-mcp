@@ -6,8 +6,13 @@ import {
   TEXT_MAX,
   formatArgs,
   formatOf,
+  geminiQuotaLimit,
   geminiRateLimited,
+  geminiRetrySeconds,
   parseWindowsVoices,
+  hasVoice,
+  stockVoiceNames,
+  voiceNotFoundWarning,
   textLimitError,
 } from "../src/flow/voice-pure.js";
 
@@ -93,5 +98,46 @@ describe("Gemini model and errors", () => {
     expect(msg).toMatch(/rate limited/);
     expect(msg).toMatch(/Quota exceeded/);
     expect(geminiRateLimited()).toMatch(/no detail/);
+  });
+  it("says the daily quota is used up when Google's retry time is hours", () => {
+    const text = "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 10, model: gemini-3.8-flash-tts Please retry in 19h56m";
+    expect(geminiRetrySeconds(text)).toBe(19 * 3600 + 56 * 60);
+    expect(geminiQuotaLimit(text)).toBe(10);
+    const msg = geminiRateLimited(text);
+    expect(msg).toMatch(/daily free quota [(]limit 10[)] is used up/);
+    expect(msg).toMatch(/19h 56m/);
+    expect(msg).not.toMatch(/per minute/);
+    expect(msg).toMatch(/Please retry in 19h56m/);
+  });
+  it("keeps the per-minute wording for a short retry time", () => {
+    const msg = geminiRateLimited("Quota exceeded, limit: 10. Please retry in 34.5s.");
+    expect(geminiRetrySeconds("Please retry in 34.5s")).toBe(34.5);
+    expect(msg).toMatch(/only a few requests per minute/);
+    expect(msg).toMatch(/Wait about 35 s and retry/);
+    expect(msg).toMatch(/Please retry in 34[.]5s/);
+    expect(geminiRateLimited("nothing useful")).toMatch(/about a minute/);
+  });
+});
+
+describe("Flow character voices", () => {
+  const options = ["voice_selection Achernar Female, soft, high pitch", "voice_selection Aoede Female, breezy", "voice_selection Charon Male, informative"];
+  it("reads the stock names from the picker's option texts", () => {
+    expect(stockVoiceNames(options)).toEqual(["Achernar", "Aoede", "Charon"]);
+    expect(stockVoiceNames([])).toEqual([]);
+  });
+  it("de-duplicates names collected over several scroll steps and finds a voice later in the list", () => {
+    const step1 = options.slice(0, 2);
+    const step2 = [options[1] ?? "", options[2] ?? "", "voice_selection Umbriel Male, easy-going"];
+    expect(stockVoiceNames([...step1, ...step2])).toEqual(["Achernar", "Aoede", "Charon", "Umbriel"]);
+    expect(hasVoice(step1, "Umbriel")).toBe(false);
+    expect(hasVoice([...step1, ...step2], "umbriel")).toBe(true);
+    expect(hasVoice(step1, "")).toBe(false);
+  });
+  it("warns that an unknown voice was left unset and names the valid ones", () => {
+    const msg = voiceNotFoundWarning("Umbriel", options);
+    expect(msg).toMatch(/"Umbriel" is not in Flow's character voice list/);
+    expect(msg).toMatch(/WITHOUT a voice/);
+    expect(msg).toMatch(/Achernar, Aoede, Charon/);
+    expect(voiceNotFoundWarning("Umbriel", [])).not.toMatch(/character voices: /);
   });
 });
