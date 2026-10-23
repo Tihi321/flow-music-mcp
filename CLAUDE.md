@@ -243,3 +243,8 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
 ### FMM-13: the settings popover (2026-10-23, found in the HUB-07 live run)
 
 - The direct composer's `Settings trigger` popover does not close on one Escape and has no `.cdk-overlay-backdrop-showing`; left open it sits over the prompt box (`.cdk-overlay-container` "intercepts pointer events" on the `.ProseMirror` click). `closePopover` (direct.ts) presses Escape, then clicks `Settings trigger` as a toggle, up to 3 rounds, then `clearBackdrops`; `applySettings` ends with it and `typePrompt` starts with it. Not yet verified live (the hub's HUB-07 run continues on this build).
+
+### FMM-14 to FMM-16 (2026-10-23, from the hub's HUB-11 film run; NOT verified live)
+
+- Picker (`attachAsset`): the `Asset list` is a `cdk-virtual-scroll-viewport`, so an asset older than the rendered ones is found by typing its title into the picker's `Search assets` textbox (the title without a trailing ellipsis: a grid label can read "Mara adjusting oversized yellow …"), then by scrolling the viewport (`scrollTop`) step by step. Whether the search box filters by title prefix, whether it keeps its text across tabs, and the viewport element chosen are unverified.
+- `flow_character` voice: only Flow's stock voices (15 in "Select a voice"; Achernar, Aoede, Charon seen) work; a Gemini TTS voice such as Umbriel is not applied, and the result has `voice_warning` (the character is still created). Gemini's daily free quota: a 429 whose text says "Please retry in 19h56m" is reported as the daily quota (`geminiRateLimited`).
