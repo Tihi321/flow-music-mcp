@@ -101,6 +101,27 @@ async function openPopover(page: Page): Promise<void> {
   if (!(await probe.isVisible().catch(() => false))) throw new Error("Could not open Flow's generation settings popover.");
 }
 
+// The settings popover does not always close on one Escape and has no showing backdrop (found 2026-10-23, HUB-07 live run:
+// it stayed over the prompt box and `.ProseMirror` clicks timed out). Escape, then the trigger button as a toggle, at most
+// 3 rounds, then the backdrop clearer; throws when it is still open.
+export async function closePopover(page: Page): Promise<void> {
+  const probe = page.getByRole("radio", { name: word("Image") });
+  const open = () => probe.isVisible().catch(() => false);
+  const hidden = () => probe.waitFor({ state: "hidden", timeout: 1500 }).then(() => true, () => false);
+  for (let attempt = 0; attempt < 3 && (await open()); attempt++) {
+    await page.keyboard.press("Escape").catch(() => {});
+    if (await hidden()) break;
+    await page.getByRole("button", { name: "Settings trigger" }).click({ timeout: 3000 }).catch(() => {});
+    if (await hidden()) break;
+  }
+  if (await open()) {
+    await clearBackdrops(page);
+    await pause(page, 400);
+  }
+  if (await open()) throw new Error("Flow's generation settings popover did not close.");
+  await clearBackdrops(page);
+}
+
 async function pickRadio(page: Page, label: string): Promise<void> {
   const radio = page.getByRole("radio", { name: word(label) }).first();
   if (!(await radio.isVisible().catch(() => false))) throw new Error(`Flow has no "${label}" option for the current mode/model.`);
@@ -150,9 +171,7 @@ export async function applySettings(page: Page, s: SceneRun): Promise<{ quote: n
   await pause(page, 700);
   const text = await page.getByRole("link", { name: /credits?$/ }).first().innerText();
   const cost = Number(text.match(/\d+/)?.[0] ?? NaN);
-  await page.keyboard.press("Escape");
-  await pause(page, 400);
-  await clearBackdrops(page);
+  await closePopover(page);
   if (Number.isNaN(cost)) throw new Error(`Could not read the credit quote from Flow ("${text}").`);
   return { quote: cost, ...(opts.ignored ? { ignored: opts.ignored } : {}) };
 }
@@ -283,6 +302,7 @@ async function attachNewestImage(page: Page, opener: Locator): Promise<void> {
 // ---- One generation ----
 
 export async function typePrompt(page: Page, prompt: string): Promise<void> {
+  await closePopover(page);
   const box = page.locator(".ProseMirror").last();
   await box.click({ timeout: 6000 });
   await page.keyboard.press("ControlOrMeta+a");
