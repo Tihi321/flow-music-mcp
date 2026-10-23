@@ -163,3 +163,29 @@ export function mergeView<T extends SnapTile>(all: T[], view: T[]): T[] {
   }
   return all.length ? [...all, ...view.filter((t) => !all.includes(t))] : [...view];
 }
+
+// ---- Picker titles (FMM-14) ----
+// A tile's title can be shown cut off with an ellipsis ("Mara adjusting oversized yellow …"). The picker lists assets by the
+// full title and has a `Search assets` box, so the title is cleaned (no trailing ellipsis, single spaces) before it is typed
+// or matched as a prefix.
+export function pickerTitle(title: string): string {
+  return title.replace(/\s+/g, " ").replace(/\s*(…|\.{2,})\s*$/, "").trim();
+}
+
+// The text typed into `Search assets`: the cleaned title, cut to its first 60 characters at a word boundary when longer.
+export function pickerSearchText(title: string): string {
+  const t = pickerTitle(title);
+  if (t.length <= 60) return t;
+  const cut = t.slice(0, 60);
+  const at = cut.lastIndexOf(" ");
+  return at > 20 ? cut.slice(0, at) : cut;
+}
+
+// Whether a picker option's accessible name ("<title> Image", icon words for voices) belongs to `title`, matched as a
+// case-insensitive prefix of the cleaned title, so a truncated title still finds its asset.
+export function optionMatchesTitle(optionName: string, title: string): boolean {
+  const want = pickerTitle(title).toLowerCase();
+  if (!want) return false;
+  const have = optionName.replace(/\s+/g, " ").trim().toLowerCase();
+  return have.startsWith(want) || have.replace(/^[a-z_]+ (?=\S)/, "").startsWith(want);
+}
