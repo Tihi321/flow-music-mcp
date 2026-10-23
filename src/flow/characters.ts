@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { Page } from "playwright-core";
 import { withDownloadLock } from "../chrome.js";
+import { voiceNotFoundWarning } from "./voice-pure.js";
 import {
   clearBackdrops,
   clickProjectNav,
@@ -96,7 +97,7 @@ async function leaveEditor(page: Page): Promise<void> {
   await ensureProjectGrid(page).catch(() => {});
 }
 
-export async function createCharacter(page: Page, c: CharacterInput, castDir: string, progress: (s: string) => void): Promise<{ name: string; url: string; portrait?: string; note?: string }> {
+export async function createCharacter(page: Page, c: CharacterInput, castDir: string, progress: (s: string) => void): Promise<{ name: string; url: string; portrait?: string; note?: string; voice_warning?: string }> {
   if (!c.image && !c.describe) throw new Error("Pass either `describe` (Flow draws the portrait) or `image`.");
   await ensureProjectGrid(page);
   await dismissOverlays(page);
@@ -150,6 +151,7 @@ export async function createCharacter(page: Page, c: CharacterInput, castDir: st
   if (c.personality) await page.getByRole("textbox", { name: "Character personality" }).fill(c.personality);
 
   let note: string | undefined;
+  let voiceWarning: string | undefined;
   if (c.voice) {
     progress("choosing the voice");
     await page.getByRole("button", { name: "Select a voice" }).click({ timeout: 5000 });
@@ -162,9 +164,9 @@ export async function createCharacter(page: Page, c: CharacterInput, castDir: st
       await page.getByRole("button", { name: "Add to character", exact: true }).click({ timeout: 5000 });
       await pause(page, 1000);
     } else {
-      const available = (await voices.getByRole("option").allInnerTexts()).map((t) => t.replace(/voice_selection/g, "").replace(/\s+/g, " ").trim().split(" ")[0]);
+      const texts = await voices.getByRole("option").allInnerTexts();
       await page.getByRole("dialog").getByRole("button", { name: "Close" }).click({ timeout: 4000 }).catch(() => page.keyboard.press("Escape"));
-      note = `Voice "${c.voice}" not found, so the character has no voice. Available: ${available.join(", ")}`;
+      voiceWarning = voiceNotFoundWarning(c.voice, texts);
     }
   }
 
@@ -176,7 +178,7 @@ export async function createCharacter(page: Page, c: CharacterInput, castDir: st
     note = [note, `the portrait could not be saved (${(err as Error).message.split("\n")[0]}); flow_character_edit with just the name saves it`].filter(Boolean).join(" · ");
   }
   await leaveEditor(page);
-  return { name: c.name, url, portrait, note };
+  return { name: c.name, url, portrait, note, voice_warning: voiceWarning };
 }
 
 // Opens an existing character and restyles its portrait in place (Nano Banana, free). Without a change it only saves the

@@ -10,6 +10,8 @@ import {
   geminiRateLimited,
   geminiRetrySeconds,
   parseWindowsVoices,
+  stockVoiceNames,
+  voiceNotFoundWarning,
   textLimitError,
 } from "../src/flow/voice-pure.js";
 
@@ -113,5 +115,21 @@ describe("Gemini model and errors", () => {
     expect(msg).toMatch(/Wait about 35 s and retry/);
     expect(msg).toMatch(/Please retry in 34[.]5s/);
     expect(geminiRateLimited("nothing useful")).toMatch(/about a minute/);
+  });
+});
+
+describe("Flow character voices", () => {
+  const options = ["voice_selection Achernar Female, soft, high pitch", "voice_selection Aoede Female, breezy", "voice_selection Charon Male, informative"];
+  it("reads the stock names from the picker's option texts", () => {
+    expect(stockVoiceNames(options)).toEqual(["Achernar", "Aoede", "Charon"]);
+    expect(stockVoiceNames([])).toEqual([]);
+  });
+  it("warns that an unknown voice was left unset and names the valid ones", () => {
+    const msg = voiceNotFoundWarning("Umbriel", options);
+    expect(msg).toMatch(/"Umbriel" is not one of Flow's character voices/);
+    expect(msg).toMatch(/WITHOUT a voice/);
+    expect(msg).toMatch(/Achernar, Aoede, Charon/);
+    expect(msg).toMatch(/Gemini TTS voices/);
+    expect(voiceNotFoundWarning("Umbriel", [])).not.toMatch(/character voices: /);
   });
 });

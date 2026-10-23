@@ -115,3 +115,19 @@ export function geminiRateLimited(detail?: string): string {
   const wait = seconds !== undefined ? `about ${waitText(seconds)}` : "about a minute";
   return `Gemini TTS rate limited (HTTP 429): the free tier allows only a few requests per minute. Wait ${wait} and retry. ${says}`;
 }
+
+// ---- Flow character voices (FMM-16) ----
+// "Select a voice" lists Flow's stock voices as options like "voice_selection Achernar Female, soft, high pitch". The names
+// are only known from the page (15 stock voices, mapped 2026-10-22), not up front, so a wrong name is reported after the
+// character exists. Gemini TTS voices (flow_narrate engine gemini) are a different, longer list: a name from there, such as
+// Umbriel, may not be a Flow character voice.
+export function stockVoiceNames(optionTexts: string[]): string[] {
+  return optionTexts.map((t) => t.replace(/voice_selection/g, "").replace(/\s+/g, " ").trim().split(" ")[0] ?? "").filter(Boolean);
+}
+
+export function voiceNotFoundWarning(voice: string, optionTexts: string[]): string {
+  const names = stockVoiceNames(optionTexts);
+  return `Voice "${voice}" is not one of Flow's character voices, so the character was made WITHOUT a voice (call flow_character again or pick one in Flow's character editor). ${
+    names.length ? `Flow's character voices: ${names.join(", ")}. ` : ""
+  }Gemini TTS voices (flow_narrate, flow_voices) are a different list.`;
+}
