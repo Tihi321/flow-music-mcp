@@ -239,3 +239,7 @@ Credits spent on all paid tests together: 40 of the 60 cap (balance 1,050 -> 1,0
 - Failed tiles (direct composer): `retryErrorTile` only presses Retry on a failed tile above the first tile known before Start; the same failed tile is counted once. `runVideoEdit` goes back to the grid and refuses to download when a new `flow-error-tile` appeared (then reopens the edit view to download).
 - Re-ask: `sceneRound` (pure) decides the scenes still to do; three rounds at most; no round after a re-ask that made nothing.
 - Verified live 2026-10-22 (free): `flow_assets` lists all 5 videos with `asb:` ids (two share a title); `flow_download` by `asb:` got the right one of the same-titled pair (different files) and a 4 s 640x360 clip by another; a stale token errors clearly; a queued image job cancelled -> `cancelled`; an image job cancelled just after it started -> "cancelled before starting (nothing spent)". Not seen live: high demand, a failed tile, a cancel after Start, a dropped scene.
+
+### FMM-13: the settings popover (2026-10-23, found in the HUB-07 live run)
+
+- The direct composer's `Settings trigger` popover does not close on one Escape and has no `.cdk-overlay-backdrop-showing`; left open it sits over the prompt box (`.cdk-overlay-container` "intercepts pointer events" on the `.ProseMirror` click). `closePopover` (direct.ts) presses Escape, then clicks `Settings trigger` as a toggle, up to 3 rounds, then `clearBackdrops`; `applySettings` ends with it and `typePrompt` starts with it. Not yet verified live (the hub's HUB-07 run continues on this build).
