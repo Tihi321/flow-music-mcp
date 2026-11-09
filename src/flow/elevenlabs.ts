@@ -27,6 +27,7 @@ import {
   redactKey,
   type ElevenAlignment,
   type ElevenModel,
+  type ElevenSubscription,
   type ElevenVoice,
   type TimedWord,
 } from "./voice-pure.js";
@@ -106,7 +107,9 @@ export interface ElevenSpeakResult {
   words?: TimedWord[];
   characters: number;
   credits_estimate: number;
+  // From a live read after the line; if that read failed, the before-read minus this line's estimate (source "estimate").
   remaining_after: number | null;
+  remaining_after_source: "read" | "estimate" | null;
 }
 
 export interface ElevenStatus {
@@ -126,6 +129,9 @@ export interface ElevenStatus {
 
 const RETRIES_429 = 3;
 const MODELS_TTL_MS = 10 * 60_000;
+// A subscription read is reused for this long by the quota guard (minus what this process spent since); FMM-20.
+const SUB_TTL_MS = 5_000;
+const AFTER_READ_TRIES = 3;
 
 export function elevenClient(deps: ElevenDeps = {}) {
   const doFetch: typeof fetch = deps.fetch ?? fetch;
@@ -193,7 +199,19 @@ export function elevenClient(deps: ElevenDeps = {}) {
     return list;
   }
 
-  const subscription = async () => readSubscription(await request("/v1/user/subscription"));
+  // Live read of the subscription (flow_elevenlabs_status always uses this one). Resets the guard's cache.
+  let subCache: { at: number; sub: ElevenSubscription; spent: number } | undefined;
+  const subscription = async () => {
+    const sub = readSubscription(await request("/v1/user/subscription"));
+    subCache = { at: Date.now(), sub, spent: 0 };
+    return sub;
+  };
+  // The guard's view: a read younger than SUB_TTL_MS with the credits this process spent since it was taken off, else a live read.
+  async function guardSubscription(): Promise<ElevenSubscription> {
+    const c = subCache;
+    if (!c || Date.now() - c.at >= SUB_TTL_MS) return subscription();
+    return { ...c.sub, used: c.sub.used + c.spent, remaining: Math.max(0, c.sub.remaining - c.spent) };
+  }
 
   // Ready, where the key came from, the live quota and which models read Croatian and English. Never throws and never
   // carries the key: with no key it is { ready: false, hint }; a refused key or an API error is { ready: false, code, hint }.
@@ -232,7 +250,7 @@ export function elevenClient(deps: ElevenDeps = {}) {
     const { key } = needKey();
     const text = a.text.trim();
     const modelId = a.model ?? ELEVEN_DEFAULT_MODEL;
-    const sub = await subscription();
+    const sub = await guardSubscription();
     const guard = elevenGuard({ text, model: modelId, language: a.language, subscription: sub, models: await models(), reserve: reserve() });
     if (!guard.ok) {
       const e = new ElevenError(guard.code, redactKey(guard.message, key));
@@ -242,10 +260,15 @@ export function elevenClient(deps: ElevenDeps = {}) {
     const body: Record<string, unknown> = { text, model_id: modelId };
     if (a.voice_settings) body.voice_settings = a.voice_settings;
     if (a.language && ELEVEN_LANGUAGE_CODE_MODELS.includes(modelId)) body.language_code = langOf(a.language);
-    const raw = (await request(`/v1/text-to-speech/${encodeURIComponent(a.voice)}/with-timestamps?output_format=${ELEVEN_OUTPUT_FORMAT}`, { method: "POST", body })) as {
-      audio_base64?: string;
-      alignment?: ElevenAlignment | null;
-    };
+    // Count the credits as spent as soon as the request goes out (a failed one may still have been billed); a failure drops the cache.
+    if (subCache) subCache.spent += guard.estimate;
+    let raw: { audio_base64?: string; alignment?: ElevenAlignment | null };
+    try {
+      raw = (await request(`/v1/text-to-speech/${encodeURIComponent(a.voice)}/with-timestamps?output_format=${ELEVEN_OUTPUT_FORMAT}`, { method: "POST", body })) as typeof raw;
+    } catch (err) {
+      subCache = undefined; // the request may have been billed: next guard reads live
+      throw err;
+    }
     if (!raw.audio_base64) throw new ElevenError("E_ELEVEN_API", "ElevenLabs returned no audio for this line.");
     const mp3 = a.target.replace(/\.\w+$/, "") + ".eleven.mp3";
     writeFileSync(mp3, Buffer.from(raw.audio_base64, "base64"));
@@ -255,11 +278,21 @@ export function elevenClient(deps: ElevenDeps = {}) {
     } finally {
       rmSync(mp3, { force: true });
     }
+    // Fresh read after the line (it also feeds the next line's guard). A 429 here is retried; if every try fails the
+    // value is the before-read minus this line's estimate, marked "estimate"; the cache keeps counting the spent credits.
     let remaining_after: number | null = null;
-    try {
-      remaining_after = (await subscription()).remaining;
-    } catch {
-      // The line is made; a failed re-read only leaves remaining_after unknown (the error is in the log).
+    let remaining_after_source: ElevenSpeakResult["remaining_after_source"] = null;
+    for (let i = 0; i < AFTER_READ_TRIES && remaining_after === null; i++) {
+      try {
+        remaining_after = (await subscription()).remaining;
+        remaining_after_source = "read";
+      } catch {
+        await sleep(2000 * (i + 1)); // the error is in the log
+      }
+    }
+    if (remaining_after === null) {
+      remaining_after = Math.max(0, sub.remaining - guard.estimate);
+      remaining_after_source = "estimate";
     }
     return {
       file: a.target,
@@ -271,6 +304,7 @@ export function elevenClient(deps: ElevenDeps = {}) {
       characters: [...text].length,
       credits_estimate: guard.estimate,
       remaining_after,
+      remaining_after_source,
     };
   }
 

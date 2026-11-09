@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { elevenClient } from "../src/flow/elevenlabs.js";
 import { alignmentToWords } from "../src/flow/voice-pure.js";
@@ -42,6 +45,40 @@ describe("ElevenLabs guard", () => {
     const paid = fakeFetch({ tier: "starter", character_count: 0, character_limit: 30000, can_extend_character_limit: false });
     await expect(client(paid.fn).speak(line)).rejects.toMatchObject({ code: "E_ELEVEN_PAID_TIER" });
     expect(paid.urls.some((u) => u.includes("/text-to-speech/"))).toBe(false);
+  });
+});
+
+describe("subscription reads (FMM-20)", () => {
+  const SUB = { tier: "free", character_count: 0, character_limit: 10000, can_extend_character_limit: false };
+  const dir = mkdtempSync(join(tmpdir(), "eleven-test-"));
+  const line = { text: "Bok!", voice: "voice123", target: join(dir, "line.mp3") };
+
+  it("reads the subscription about once per line, not twice", async () => {
+    const f = fakeFetch(SUB);
+    const c = client(f.fn);
+    for (let i = 0; i < 5; i++) await c.speak({ ...line, target: join(dir, `line${i}.mp3`) });
+    expect(f.urls.filter((u) => u.includes("/v1/user/subscription")).length).toBeLessThanOrEqual(6); // 5 lines, not 10
+  });
+
+  it("fills remaining_after from the before-read minus the line when every after-read gets a 429", async () => {
+    let subReads = 0;
+    const fn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/v1/user/subscription")) {
+        subReads++;
+        return subReads === 1 ? Response.json(SUB) : new Response("{}", { status: 429, headers: { "retry-after": "1" } });
+      }
+      if (url.includes("/v1/models")) return Response.json(MODELS);
+      return Response.json({ audio_base64: "AAAA", alignment: null });
+    }) as typeof fetch;
+    const c = client(fn);
+    const r = await c.speak(line);
+    expect(r.remaining_after).toBe(10000 - 4);
+    expect(r.remaining_after_source).toBe("estimate");
+    // The cached read minus the 4 spent credits is what the next guard sees: 9996 - 200 reserve < 9800, refused with no new read.
+    const reads = subReads;
+    await expect(c.speak({ ...line, text: "x".repeat(9800) })).rejects.toMatchObject({ code: "E_ELEVEN_QUOTA" });
+    expect(subReads).toBe(reads);
   });
 });
 
