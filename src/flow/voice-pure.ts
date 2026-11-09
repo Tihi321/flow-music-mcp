@@ -151,6 +151,7 @@ export type ElevenCode =
   | "E_ELEVEN_LANG" // the model does not read the line's language
   | "E_ELEVEN_BLOCKED" // ElevenLabs answered detected_unusual_activity (the free tier blocks some VPNs and proxies)
   | "E_ELEVEN_MODEL" // the model is not on the account's /v1/models list or cannot do text to speech
+  | "E_ELEVEN_RATE" // HTTP 429 (FMM-21); a text-to-speech request is not resent, because the repo cannot show that a 429 means "not charged"
   | "E_ELEVEN_API"; // any other answer, or ElevenLabs could not be reached
 
 // The message starts with the code, so a tool error reads "E_ELEVEN_QUOTA: ...".
@@ -289,7 +290,7 @@ export function elevenApiError(status: number, body: string): { code: ElevenCode
     const scope = /permission/i.test(text) ? " The key lacks a permission: allow Text to Speech and read access to Voices, Models and User in the key's settings." : "";
     return { code: "E_ELEVEN_KEY", message: `ElevenLabs refused the key.${scope} ${says}` };
   }
-  if (status === 429) return { code: "E_ELEVEN_API", message: `rate limited even after waiting; try again in a minute. ${says}` };
+  if (status === 429) return { code: "E_ELEVEN_RATE", message: `rate limited; try again in a minute (a text-to-speech request is never resent automatically: a 429 may still have been billed, so check flow_elevenlabs_status first). ${says}` };
   return { code: "E_ELEVEN_API", message: says };
 }
 

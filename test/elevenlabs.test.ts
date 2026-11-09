@@ -82,6 +82,38 @@ describe("subscription reads (FMM-20)", () => {
   });
 });
 
+describe("429 handling (FMM-21)", () => {
+  const SUB = { tier: "free", character_count: 0, character_limit: 10000, can_extend_character_limit: false };
+  const line = { text: "Bok!", voice: "voice123", target: join(mkdtempSync(join(tmpdir(), "eleven-test-")), "line.mp3") };
+
+  it("never resends a TTS POST that got a 429, and retries an after-read only through request()'s own 3 retries", async () => {
+    let posts = 0;
+    const fn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/v1/models")) return Response.json(MODELS);
+      if (url.includes("/v1/user/subscription")) return Response.json(SUB);
+      posts++;
+      return new Response("{}", { status: 429 });
+    }) as typeof fetch;
+    await expect(client(fn).speak(line)).rejects.toMatchObject({ code: "E_ELEVEN_RATE" });
+    expect(posts).toBe(1);
+
+    let reads = 0;
+    const slept: number[] = [];
+    const fn2 = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/v1/models")) return Response.json(MODELS);
+      if (url.includes("/v1/user/subscription")) return ++reads === 1 ? Response.json(SUB) : new Response("{}", { status: 429 });
+      return Response.json({ audio_base64: "AAAA", alignment: null });
+    }) as typeof fetch;
+    const c = elevenClient({ fetch: fn2, key: () => ({ key: FAKE_KEY, source: "file" }), log: () => {}, reserve: () => 200, sleep: async (ms) => void slept.push(ms), convert: async () => 1 });
+    const r = await c.speak(line);
+    expect(r.remaining_after_source).toBe("estimate");
+    expect(reads).toBe(1 + 4); // the guard read, then one after-read: 1 try + 3 retries
+    expect(slept.length).toBe(3); // no sleep after the last failed try
+  });
+});
+
 describe("alignmentToWords", () => {
   it("groups characters into words, drops edge punctuation and keeps Croatian letters", () => {
     const text = "Bruno, čekaj malo!";
