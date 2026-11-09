@@ -6,8 +6,10 @@ import { parseEnv } from "node:util";
 
 // Settings and keys from .env files, so they can be set by hand in a text editor (no tool, no assistant): first the
 // repo's own .env (next to package.json), then ~/.flow-music-mcp/.env, which survives a fresh clone. A variable that is
-// already set in the real environment wins, then the first file that sets it (Node's process.loadEnvFile never
-// overwrites). See .env.example for every setting. Imported first by index.ts, before anything reads process.env.
+// already set in the real environment wins (even when empty), then the first file that gives it a non-empty value: an
+// empty `NAME=` copied from .env.example into the repo's .env does not hide a value set in ~/.flow-music-mcp/.env
+// (Node's process.loadEnvFile never overwrites, so an empty value from a file is cleared before the next file is read).
+// See .env.example for every setting. Imported first by index.ts, before anything reads process.env.
 
 const REPO_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOME = process.env.FLOW_MUSIC_MCP_HOME ?? join(homedir(), ".flow-music-mcp");
@@ -19,6 +21,7 @@ export const presetEnv: Readonly<Record<string, string | undefined>> = { ...proc
 
 for (const file of ENV_FILES) {
   if (!existsSync(file)) continue;
+  for (const [name, value] of Object.entries(process.env)) if (value?.trim() === "" && !(name in presetEnv)) delete process.env[name];
   try {
     process.loadEnvFile(file);
     loadedEnvFiles.push(file);
