@@ -47,12 +47,12 @@ A generation runs as a job: the call waits up to `wait` seconds (default 30) and
 ElevenLabs is used on its **free tier only** (about 10,000 credits a month; no commercial licence, attribution expected). Setup, done by you and never by an assistant:
 
 1. Make a free account on [elevenlabs.io](https://elevenlabs.io/) and create an API key. If the key dialog offers scopes, allow Text to Speech plus read access to Voices, Models and User, and nothing else.
-2. Put it in the `ELEVENLABS_API_KEY` environment variable, or as `ELEVENLABS_API_KEY=...` in `%USERPROFILE%\.flow-music-mcp\.env` (outside every repo).
+2. Put it in the `ELEVENLABS_API_KEY` environment variable (`ELEVEN_CREATOR_KEY` is read next, for a key already stored under that name), or as `ELEVENLABS_API_KEY=...` in `%USERPROFILE%\.flow-music-mcp\.env` (outside every repo).
 3. Restart flow-music-mcp.
 
 There is no tool that sets or stores this key, so it never passes through a chat. It is sent only as the `xi-api-key` header, and every error, log line and result replaces it with `[key]`.
 
-- `flow_elevenlabs_status` reads the quota live: `{ ready, source ("env" | "file"), tier, used, limit, remaining, reserve, resetAt, paidRisk, models: [{ id, tts, hr, en, multiplier }] }`. With no key it is `{ ready: false, hint }`. `reserve` is `FLOW_MUSIC_MCP_ELEVEN_RESERVE` (default 200 credits never spent). `paidRisk` is true when the account is not on the free tier or could bill past its limit.
+- `flow_elevenlabs_status` reads the quota live: `{ ready, source ("env" | "env:ELEVEN_CREATOR_KEY" | "file"), tier, used, limit, remaining, reserve, resetAt, paidRisk, models: [{ id, tts, hr, en, multiplier }] }`. With no key it is `{ ready: false, hint }`. `reserve` is `FLOW_MUSIC_MCP_ELEVEN_RESERVE` (default 200 credits never spent). `paidRisk` is true when the account is not on the free tier or could bill past its limit.
 - `flow_elevenlabs_voices` lists the voices the account can use: `[{ voiceId, name, category, labels: { gender, age, accent, description } }]`. Free API users get the `premade` voices, not the Voice Library. Preview files are never downloaded.
 - Requests go one at a time; a 429 waits and retries. Error codes: `E_ELEVEN_KEY` (no key, or the key was refused), `E_ELEVEN_BLOCKED` (ElevenLabs saw "unusual activity"; a VPN or proxy can cause it), `E_ELEVEN_API` (anything else).
 - `flow_narrate { engine: "elevenlabs", text, voice: <voiceId>, model?, voice_settings?, language?, timestamps?, out?, name?, format? }` calls `POST /v1/text-to-speech/{voice}/with-timestamps` with `output_format=mp3_44100_128` (allowed on the free tier) and converts to `format` with ffmpeg (as the Gemini engine does). `model` defaults to `eleven_multilingual_v2` (the language follows the text); `language` is checked against the model's live languages and sent as `language_code` only to models that take it (`eleven_flash_v2_5`, `eleven_turbo_v2_5`). The result is `{ file, durationSec, engine, voice, model, words: [{ w, t0, t1 }], characters, credits_estimate, remaining_after, format }`: `words` come from ElevenLabs' character alignment (split on spaces, punctuation dropped from the edges, Croatian letters kept), in seconds from the start of `file`; `remaining_after` is a fresh quota read (null if that read failed).
@@ -83,6 +83,7 @@ Flow asks "Rights to use this image" before it takes a local file (a first frame
 | `FLOW_MUSIC_MCP_CHROME` | found | Chrome executable |
 | `FLOW_MUSIC_MCP_PAUSE_MIN_S` / `_MAX_S` | 20 / 45 | pause between generations |
 | `ELEVENLABS_API_KEY` | unset | ElevenLabs key, set by you only (see "ElevenLabs voices") |
+| `ELEVEN_CREATOR_KEY` | unset | Read when `ELEVENLABS_API_KEY` is unset; environment only, not the `.env` files |
 | `FLOW_MUSIC_MCP_ELEVEN_RESERVE` | 200 | ElevenLabs credits never spent |
 
 ## Tests

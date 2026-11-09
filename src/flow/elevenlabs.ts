@@ -45,22 +45,26 @@ async function convertWithFfmpeg(source: string, target: string): Promise<number
 
 const BASE = "https://api.elevenlabs.io";
 const KEY_NAME = "ELEVENLABS_API_KEY";
+// The user's own name for the key, a Windows user-scope variable (HUB-31). Read after KEY_NAME, never in .env files.
+const CREATOR_KEY_NAME = "ELEVEN_CREATOR_KEY";
 
 export interface ElevenKey {
   key: string;
-  source: "env" | "file";
+  source: "env" | "env:ELEVEN_CREATOR_KEY" | "file";
 }
 
 export const ELEVEN_KEY_HINT =
   "No ElevenLabs key yet. The user (never an assistant) makes a free account on elevenlabs.io, creates an API key " +
   "(restricted to Text to Speech plus read access to Voices, Models and User if the dialog offers those), and puts it in " +
-  "the ELEVENLABS_API_KEY environment variable or in ~/.flow-music-mcp/.env as ELEVENLABS_API_KEY=..., then restarts flow-music-mcp.";
+  "the ELEVENLABS_API_KEY (or ELEVEN_CREATOR_KEY) environment variable or in ~/.flow-music-mcp/.env as ELEVENLABS_API_KEY=..., then restarts flow-music-mcp.";
 
-// The key: a real environment variable first, then the first .env file that holds a usable one. Reading the files here
+// The key: a real environment variable first (ELEVENLABS_API_KEY, then ELEVEN_CREATOR_KEY), then the first .env file that holds a usable one. Reading the files here
 // (not only process.env) means an empty ELEVENLABS_API_KEY= copied from .env.example cannot hide the real one.
 export function elevenKey(): ElevenKey | undefined {
   const env = plausible(presetEnv[KEY_NAME] ?? "");
   if (env) return { key: env, source: "env" };
+  const creator = plausible(presetEnv[CREATOR_KEY_NAME] ?? "");
+  if (creator) return { key: creator, source: "env:ELEVEN_CREATOR_KEY" };
   for (const file of ENV_FILES) {
     if (!existsSync(file)) continue;
     try {
@@ -115,7 +119,7 @@ export interface ElevenSpeakResult {
 
 export interface ElevenStatus {
   ready: boolean;
-  source?: "env" | "file";
+  source?: ElevenKey["source"];
   tier?: string;
   used?: number;
   limit?: number;
