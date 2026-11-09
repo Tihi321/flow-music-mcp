@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 // Settings and keys from .env files, so they can be set by hand in a text editor (no tool, no assistant): first the
 // repo's own .env (next to package.json), then ~/.flow-music-mcp/.env, which survives a fresh clone. A variable that is
@@ -24,4 +25,27 @@ for (const file of ENV_FILES) {
   } catch (err) {
     process.stderr.write(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}\n`);
   }
+}
+
+// A key's value: the real environment first, then the first .env file that holds a usable one (`accept` returns the
+// cleaned value, or undefined for empty or template text). Reading the files here, not process.env, means an empty
+// `NAME=` copied from .env.example into the repo's .env cannot hide a real key in ~/.flow-music-mcp/.env. The value is
+// never logged. `files` is for tests.
+export function keyFromEnv(
+  name: string,
+  accept: (raw: string) => string | undefined,
+  files: readonly string[] = ENV_FILES,
+): { value: string; source: "env" | "file"; file?: string } | undefined {
+  const env = accept(presetEnv[name] ?? "");
+  if (env) return { value: env, source: "env" };
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    try {
+      const value = accept(parseEnv(readFileSync(file, "utf8"))[name] ?? "");
+      if (value) return { value, source: "file", file };
+    } catch {
+      // An unreadable file is reported at start-up.
+    }
+  }
+  return undefined;
 }

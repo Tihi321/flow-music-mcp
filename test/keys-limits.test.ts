@@ -1,4 +1,8 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { keyFromEnv } from "../src/env.js";
 import { looksLikeKey, plausible } from "../src/flow/key-format.js";
 import { DEFAULT_MAX_CREDITS, capOf, defaultMaxCredits } from "../src/flow/limits.js";
 
@@ -72,5 +76,16 @@ describe("capOf / defaultMaxCredits", () => {
     expect(capOf(undefined)).toBe(120);
     expect(capOf(10)).toBe(10);
     expect(capOf(0)).toBe(0);
+  });
+});
+
+describe("keyFromEnv", () => {
+  it("an empty value in the first .env file does not hide a real key in the second", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fmm-env-"));
+    const [repo, home] = [join(dir, "repo.env"), join(dir, "home.env")];
+    const fake = "fake-test-key-0123456789abcdef";
+    writeFileSync(repo, "FMM_TEST_KEY=\n");
+    writeFileSync(home, `FMM_TEST_KEY=${fake}\n`);
+    expect(keyFromEnv("FMM_TEST_KEY", plausible, [repo, home])).toEqual({ value: fake, source: "file", file: home });
   });
 });

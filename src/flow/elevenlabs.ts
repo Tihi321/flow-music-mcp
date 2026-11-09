@@ -5,9 +5,9 @@
 // FMM-18 adds `speak`: POST /v1/text-to-speech/{voice}/with-timestamps (mp3_44100_128, free tier), the quota and tier
 // guard before it, ffmpeg conversion to the asked format, and the character alignment turned into word times.
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { parseEnv, promisify } from "node:util";
-import { ENV_FILES, presetEnv } from "../env.js";
+import { rmSync, writeFileSync } from "node:fs";
+import { promisify } from "node:util";
+import { keyFromEnv, presetEnv } from "../env.js";
 import { plausible } from "./key-format.js";
 import {
   ELEVEN_DEFAULT_MODEL,
@@ -65,16 +65,8 @@ export function elevenKey(): ElevenKey | undefined {
   if (env) return { key: env, source: "env" };
   const creator = plausible(presetEnv[CREATOR_KEY_NAME] ?? "");
   if (creator) return { key: creator, source: "env:ELEVEN_CREATOR_KEY" };
-  for (const file of ENV_FILES) {
-    if (!existsSync(file)) continue;
-    try {
-      const key = plausible(parseEnv(readFileSync(file, "utf8"))[KEY_NAME] ?? "");
-      if (key) return { key, source: "file" };
-    } catch {
-      // An unreadable file is reported by env.ts at start-up.
-    }
-  }
-  return undefined;
+  const file = keyFromEnv(KEY_NAME, plausible);
+  return file && { key: file.value, source: "file" };
 }
 
 // One request at a time across the whole process (the free tier allows 2-4 at once; one is safe).

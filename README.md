@@ -72,7 +72,7 @@ Settings are environment variables, and you can keep them in a `.env` file inste
 
 Flow asks "Rights to use this image" before it takes a local file (a first frame, a reference picture). The tool clicks "I agree" only when you have written `FLOW_MUSIC_MCP_UPLOAD_RIGHTS=agree` in `.env` yourself, and only for files you give it; otherwise it cancels and nothing is uploaded (images already in Flow work as `asset:<media_id>` either way). `flow_status` shows the current setting as `upload_rights`.
 
-`.env` is in `.gitignore`, so keys are never committed. Precedence: a real environment variable, then this folder's `.env`, then the one in `%USERPROFILE%\.flow-music-mcp`. The Gemini key can also live in `%USERPROFILE%\.flow-music-mcp\gemini-key` (what `flow_set_key` writes, after checking the key with Google), and the old flow-mcp file `%USERPROFILE%\.flow-mcp\gemini-key` is still read. No tool ever shows more than a key's last 4 characters.
+`.env` is in `.gitignore`, so keys are never committed. Precedence: a real environment variable, then this folder's `.env`, then the one in `%USERPROFILE%\.flow-music-mcp`. For the keys (`GEMINI_API_KEY`, `ELEVENLABS_API_KEY`) an empty or template value does not count, so an empty `GEMINI_API_KEY=` left in this folder's `.env` does not hide a real key in the other file. The Gemini key can also live in `%USERPROFILE%\.flow-music-mcp\gemini-key` (what `flow_set_key` writes, after checking the key with Google), and the old flow-mcp file `%USERPROFILE%\.flow-mcp\gemini-key` is still read. No tool ever shows more than a key's last 4 characters.
 
 | Env | Default | |
 |---|---|---|

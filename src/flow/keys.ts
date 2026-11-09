@@ -1,9 +1,10 @@
-// The Gemini (Google AI Studio) key. Lookup order: env GEMINI_API_KEY, ~/.flow-music-mcp/gemini-key, then the older
+// The Gemini (Google AI Studio) key. Lookup order: env GEMINI_API_KEY, then GEMINI_API_KEY in the first .env file that
+// holds a usable one (repo, then ~/.flow-music-mcp), ~/.flow-music-mcp/gemini-key, then the older
 // ~/.flow-mcp/gemini-key (flow-mcp's file). The key is never printed, logged or returned: only its last 4 characters.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import "../env.js";
+import { keyFromEnv } from "../env.js";
 import { HOME_DIR } from "../chrome.js";
 import { looksLikeKey, plausible } from "./key-format.js";
 
@@ -11,8 +12,9 @@ const OWN_FILE = () => join(HOME_DIR, "gemini-key");
 const LEGACY_FILE = () => join(homedir(), ".flow-mcp", "gemini-key");
 
 function find(): { key: string; source: string } | undefined {
-  const env = plausible(process.env.GEMINI_API_KEY ?? "");
-  if (env) return { key: env, source: "GEMINI_API_KEY (environment or .env)" };
+  // keyFromEnv, not process.env: an empty GEMINI_API_KEY= in the repo's .env must not hide one in ~/.flow-music-mcp/.env.
+  const env = keyFromEnv("GEMINI_API_KEY", plausible);
+  if (env) return { key: env.value, source: env.file ? `GEMINI_API_KEY in ${env.file}` : "GEMINI_API_KEY (environment)" };
   for (const file of [OWN_FILE(), LEGACY_FILE()]) {
     if (!existsSync(file)) continue;
     const key = plausible(readFileSync(file, "utf8"));
