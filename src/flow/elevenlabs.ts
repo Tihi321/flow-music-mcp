@@ -107,9 +107,9 @@ export interface ElevenSpeakResult {
   words?: TimedWord[];
   characters: number;
   credits_estimate: number;
-  // From a live read after the line; if that read failed, the before-read minus this line's estimate (source "estimate").
-  remaining_after: number | null;
-  remaining_after_source: "read" | "estimate" | null;
+  // From a live read after the line; if that read failed, the before-read minus this line's estimate (source "estimate"). Never null.
+  remaining_after: number;
+  remaining_after_source: "read" | "estimate";
 }
 
 export interface ElevenStatus {
@@ -131,7 +131,6 @@ const RETRIES_429 = 3;
 const MODELS_TTL_MS = 10 * 60_000;
 // A subscription read is reused for this long by the quota guard (minus what this process spent since); FMM-20.
 const SUB_TTL_MS = 5_000;
-const AFTER_READ_TRIES = 3;
 
 export function elevenClient(deps: ElevenDeps = {}) {
   const doFetch: typeof fetch = deps.fetch ?? fetch;
@@ -160,7 +159,8 @@ export function elevenClient(deps: ElevenDeps = {}) {
     return new ElevenError("E_ELEVEN_API", redactKey(`could not reach ElevenLabs: ${err instanceof Error ? err.message : String(err)}`, key));
   };
 
-  // GET or POST one endpoint, one at a time; a 429 waits (Retry-After, else 1, 2, 4 s) and tries again.
+  // GET or POST one endpoint, one at a time. A GET that gets a 429 waits (Retry-After, else 1, 2, 4 s) and tries again (the
+  // only retry layer). A POST is never resent on a 429 (FMM-21): nothing in the repo shows that a 429 means "not charged".
   async function request(path: string, init: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<unknown> {
     const { key } = needKey();
     const method = init.method ?? "GET";
@@ -176,7 +176,7 @@ export function elevenClient(deps: ElevenDeps = {}) {
           log(`${method} ${where} -> ${res.status}`, key);
           if (res.ok) return (await res.json()) as unknown;
           const text = await res.text().catch(() => "");
-          if (res.status === 429 && attempt < RETRIES_429) {
+          if (res.status === 429 && method === "GET" && attempt < RETRIES_429) {
             const after = Number(res.headers.get("retry-after"));
             await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 30) * 1000 : 1000 * 2 ** attempt);
             continue;
@@ -278,20 +278,14 @@ export function elevenClient(deps: ElevenDeps = {}) {
     } finally {
       rmSync(mp3, { force: true });
     }
-    // Fresh read after the line (it also feeds the next line's guard). A 429 here is retried; if every try fails the
-    // value is the before-read minus this line's estimate, marked "estimate"; the cache keeps counting the spent credits.
-    let remaining_after: number | null = null;
-    let remaining_after_source: ElevenSpeakResult["remaining_after_source"] = null;
-    for (let i = 0; i < AFTER_READ_TRIES && remaining_after === null; i++) {
-      try {
-        remaining_after = (await subscription()).remaining;
-        remaining_after_source = "read";
-      } catch {
-        await sleep(2000 * (i + 1)); // the error is in the log
-      }
-    }
-    if (remaining_after === null) {
-      remaining_after = Math.max(0, sub.remaining - guard.estimate);
+    // Fresh read after the line (it also feeds the next line's guard). One call: request() already retries a 429 on a GET.
+    // If it fails the value is the before-read minus this line's estimate, marked "estimate"; the cache keeps counting the spent credits.
+    let remaining_after: number;
+    let remaining_after_source: ElevenSpeakResult["remaining_after_source"] = "read";
+    try {
+      remaining_after = (await subscription()).remaining;
+    } catch {
+      remaining_after = Math.max(0, sub.remaining - guard.estimate); // the error is in the log
       remaining_after_source = "estimate";
     }
     return {
