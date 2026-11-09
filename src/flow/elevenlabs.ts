@@ -2,11 +2,46 @@
 // ELEVENLABS_API_KEY: the real environment first, then the .env files (src/env.ts; ~/.flow-music-mcp/.env lives outside
 // every repo). There is no tool that sets or stores it: only the user does. The key is sent only as the `xi-api-key`
 // header, and every error, log line and result goes through `redactKey`, so it never leaves this module.
-import { existsSync, readFileSync } from "node:fs";
-import { parseEnv } from "node:util";
+// FMM-18 adds `speak`: POST /v1/text-to-speech/{voice}/with-timestamps (mp3_44100_128, free tier), the quota and tier
+// guard before it, ffmpeg conversion to the asked format, and the character alignment turned into word times.
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { parseEnv, promisify } from "node:util";
 import { ENV_FILES, presetEnv } from "../env.js";
 import { plausible } from "./key-format.js";
-import { ElevenError, elevenApiError, elevenReserve, readModels, readSubscription, readVoices, redactKey, type ElevenModel, type ElevenVoice } from "./voice-pure.js";
+import {
+  ELEVEN_DEFAULT_MODEL,
+  ELEVEN_LANGUAGE_CODE_MODELS,
+  ELEVEN_OUTPUT_FORMAT,
+  ElevenError,
+  alignmentToWords,
+  elevenApiError,
+  elevenGuard,
+  elevenReserve,
+  formatArgs,
+  formatOf,
+  langOf,
+  readModels,
+  readSubscription,
+  readVoices,
+  redactKey,
+  type ElevenAlignment,
+  type ElevenModel,
+  type ElevenVoice,
+  type TimedWord,
+} from "./voice-pure.js";
+
+const run = promisify(execFile);
+const FFMPEG = process.env.FLOW_MUSIC_MCP_FFMPEG ?? "ffmpeg";
+const FFPROBE = process.env.FLOW_MUSIC_MCP_FFPROBE ?? "ffprobe";
+
+// The same conversion as the Gemini engine (gemini.ts): high-pass, loudness -16 LUFS, 48 kHz stereo, the target's
+// encoder. Nothing is trimmed, so word times stay relative to the start of the file. Returns the duration in seconds.
+async function convertWithFfmpeg(source: string, target: string): Promise<number> {
+  await run(FFMPEG, ["-y", "-i", source, "-af", "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", ...formatArgs(formatOf(target)), target]);
+  const { stdout } = await run(FFPROBE, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", target]);
+  return Number(stdout.trim());
+}
 
 const BASE = "https://api.elevenlabs.io";
 const KEY_NAME = "ELEVENLABS_API_KEY";
@@ -52,6 +87,30 @@ export interface ElevenDeps {
   log?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
   reserve?: () => number;
+  convert?: (source: string, target: string) => Promise<number>;
+}
+
+export interface ElevenSpeakArgs {
+  text: string;
+  voice: string;
+  target: string;
+  model?: string;
+  voice_settings?: { stability?: number; similarity_boost?: number; style?: number; speed?: number; use_speaker_boost?: boolean };
+  language?: string;
+  timestamps?: boolean;
+}
+
+// The flow_narrate engine "elevenlabs" result. `words` times are seconds from the start of `file`.
+export interface ElevenSpeakResult {
+  file: string;
+  durationSec: number;
+  engine: "elevenlabs";
+  voice: string;
+  model: string;
+  words?: TimedWord[];
+  characters: number;
+  credits_estimate: number;
+  remaining_after: number | null;
 }
 
 export interface ElevenStatus {
@@ -77,6 +136,7 @@ export function elevenClient(deps: ElevenDeps = {}) {
   const findKey = deps.key ?? elevenKey;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const reserve = deps.reserve ?? (() => elevenReserve(process.env.FLOW_MUSIC_MCP_ELEVEN_RESERVE));
+  const convert = deps.convert ?? convertWithFfmpeg;
   let modelsCache: { at: number; models: ElevenModel[] } | undefined;
 
   const needKey = (): ElevenKey => {
@@ -170,7 +230,55 @@ export function elevenClient(deps: ElevenDeps = {}) {
     return readVoices(await request("/v1/voices"));
   }
 
-  return { status, voices, models, subscription, request, reserve, needKey, clean, log };
+  // Speaks one line. The quota and tier are read live and checked BEFORE the TTS request (a refusal sends nothing);
+  // afterwards a fresh subscription read gives `remaining_after`.
+  async function speak(a: ElevenSpeakArgs): Promise<ElevenSpeakResult> {
+    const { key } = needKey();
+    const text = a.text.trim();
+    const modelId = a.model ?? ELEVEN_DEFAULT_MODEL;
+    const sub = await subscription();
+    const guard = elevenGuard({ text, model: modelId, language: a.language, subscription: sub, models: await models(), reserve: reserve() });
+    if (!guard.ok) {
+      const e = new ElevenError(guard.code, redactKey(guard.message, key));
+      log(`refused ${modelId}: ${e.message}`, key);
+      throw e;
+    }
+    const body: Record<string, unknown> = { text, model_id: modelId };
+    if (a.voice_settings) body.voice_settings = a.voice_settings;
+    if (a.language && ELEVEN_LANGUAGE_CODE_MODELS.includes(modelId)) body.language_code = langOf(a.language);
+    const raw = (await request(`/v1/text-to-speech/${encodeURIComponent(a.voice)}/with-timestamps?output_format=${ELEVEN_OUTPUT_FORMAT}`, { method: "POST", body })) as {
+      audio_base64?: string;
+      alignment?: ElevenAlignment | null;
+    };
+    if (!raw.audio_base64) throw new ElevenError("E_ELEVEN_API", "ElevenLabs returned no audio for this line.");
+    const mp3 = a.target.replace(/\.\w+$/, "") + ".eleven.mp3";
+    writeFileSync(mp3, Buffer.from(raw.audio_base64, "base64"));
+    let durationSec: number;
+    try {
+      durationSec = await convert(mp3, a.target);
+    } finally {
+      rmSync(mp3, { force: true });
+    }
+    let remaining_after: number | null = null;
+    try {
+      remaining_after = (await subscription()).remaining;
+    } catch {
+      // The line is made; a failed re-read only leaves remaining_after unknown (the error is in the log).
+    }
+    return {
+      file: a.target,
+      durationSec: Math.round(durationSec * 1000) / 1000,
+      engine: "elevenlabs",
+      voice: a.voice,
+      model: modelId,
+      ...(a.timestamps === false ? {} : { words: alignmentToWords(raw.alignment) }),
+      characters: [...text].length,
+      credits_estimate: guard.estimate,
+      remaining_after,
+    };
+  }
+
+  return { status, voices, speak, models, subscription, request, reserve, needKey, clean, log };
 }
 
 // The process-wide client the tools use.

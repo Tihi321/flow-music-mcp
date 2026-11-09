@@ -105,26 +105,46 @@ export function buildLocalFlowTools(): Tool[] {
     ),
     def(
       "flow_narrate",
-      "Record narration as an audio file (`format`: mp3, wav, ogg or m4a, default m4a), free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'; the language follows the text, checked with English, Croatian, German and Spanish; the free tier allows only a few requests per minute, so wait about a minute after a 429; when Google reports the daily free quota used up the error says so and when it resets); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and take up to 4000 characters of text (engine flow: 400). flow_assemble can lay the result over a film.",
+      "Record narration as an audio file (`format`: mp3, wav, ogg or m4a, default m4a), free and instantly. `engine: \"gemini\"` uses Google AI Studio's text-to-speech (the same voices Flow has, needs a free key: flow_set_key, ~/.flow-music-mcp/gemini-key or GEMINI_API_KEY; takes a `style` note like 'warmly, like a documentary narrator'; the language follows the text, checked with English, Croatian, German and Spanish; the free tier allows only a few requests per minute, so wait about a minute after a 429; when Google reports the daily free quota used up the error says so and when it resets); `engine: \"windows\"` uses a voice installed on this PC (System.Speech, no key). `engine: \"flow\"` records a cheap 360p Omni take with a Flow voice attached and extracts its sound (SPENDS CREDITS, about 4-7: ask the user first and pass max_credits; the line is capped by the take length, about 12 words per 4 s). gemini and windows cost nothing and take up to 4000 characters of text (engine flow: 400). `engine: \"elevenlabs\"` uses ElevenLabs on its FREE TIER ONLY (key ELEVENLABS_API_KEY, set by the user; see flow_elevenlabs_status): `voice` is a voiceId from flow_elevenlabs_voices, `model` defaults to eleven_multilingual_v2 (its language follows the text; `language` is still checked against the model's live languages and passed as language_code only to models that take it, e.g. eleven_flash_v2_5), optional `voice_settings`; the result is { file, durationSec, engine, voice, model, words: [{ w, t0, t1 }] (seconds from the start of the file; omitted with timestamps: false), characters, credits_estimate, remaining_after }. It spends free credits (about 1 per character) and refuses BEFORE sending with E_ELEVEN_QUOTA when the estimate is above remaining minus the reserve, E_ELEVEN_PAID_TIER when the account could bill money, E_ELEVEN_LANG when the model does not read `language`; other errors: E_ELEVEN_KEY, E_ELEVEN_BLOCKED, E_ELEVEN_MODEL, E_ELEVEN_API. flow_assemble can lay the result over a film.",
       z.object({
         out: outDir,
         name: z.string().optional().describe("File name stem (default narration-001, -002, ...)"),
         engine: z
-          .enum(["gemini", "windows", "flow"])
+          .enum(["gemini", "windows", "flow", "elevenlabs"])
           .default("gemini")
-          .describe("'gemini' uses Google AI Studio's text-to-speech: free tier, no length limit, needs a key. 'windows' uses a voice installed on this PC: free, instant, no key. 'flow' makes a paid Flow take (capped by max_credits)."),
+          .describe("'gemini' uses Google AI Studio's text-to-speech: free tier, no length limit, needs a key. 'windows' uses a voice installed on this PC: free, instant, no key. 'flow' makes a paid Flow take (capped by max_credits). 'elevenlabs' uses ElevenLabs' free tier with word timestamps (guarded against the free quota and any paid tier)."),
         max_credits: z.number().int().min(1).optional().describe("Engine flow only: the live quote of the take must not exceed it. Default: FLOW_MUSIC_MCP_MAX_CREDITS from .env (50 if unset)."),
         project: z.string().optional().describe("Engine flow only: the Flow project (name or id) to make the take in. Default: the project open in the Flow tab."),
         image: z.string().optional().describe("Engine flow only: the picture the voice speaks from (Flow needs one): 'asset:<media_id or title>' or an absolute path. Default: the project's newest image."),
-        format: z.enum(AUDIO_FORMATS).default("m4a").describe("File format for engines gemini and windows: mp3, wav, ogg (Vorbis) or m4a (AAC, the default). Engine flow always makes .m4a."),
+        format: z.enum(AUDIO_FORMATS).default("m4a").describe("File format for engines gemini, windows and elevenlabs: mp3, wav, ogg (Vorbis) or m4a (AAC, the default). Engine flow always makes .m4a."),
         text: z.string().min(1).max(TEXT_MAX_ANY).describe("The line to speak, up to 4000 characters for gemini and windows. Engine flow takes at most 400 characters; about 20 words fit 8 s, 30 words 12 s."),
         voice: z.string().min(1).default("Charon").describe("Voice name from flow_voices, e.g. Charon (informative), Aoede (breezy), Gacrux (mature) for Google; Microsoft Zira Desktop or Microsoft David Desktop for Windows (the default Charon maps to Zira there)."),
         style: z.string().max(200).optional().describe("Delivery note for the 'gemini' engine, e.g. 'slowly and warmly, like a documentary narrator'."),
+        model: z.string().min(1).optional().describe("Engine elevenlabs only: the model id (default eleven_multilingual_v2; eleven_flash_v2_5 takes `language` as language_code). flow_elevenlabs_status lists the models and whether they read hr and en."),
+        voice_settings: z
+          .object({
+            stability: z.number().min(0).max(1).optional(),
+            similarity_boost: z.number().min(0).max(1).optional(),
+            style: z.number().min(0).max(1).optional(),
+            speed: z.number().min(0.7).max(1.2).optional(),
+            use_speaker_boost: z.boolean().optional(),
+          })
+          .optional()
+          .describe("Engine elevenlabs only: ElevenLabs voice settings (stability, similarity_boost, style 0-1; speed 0.7-1.2)."),
+        language: z.string().min(2).max(10).optional().describe("Engine elevenlabs only: the line's language code (hr, en ...). Checked against the model's live languages (E_ELEVEN_LANG); sent as language_code only to models that take it."),
+        timestamps: z.boolean().default(true).describe("Engine elevenlabs only: include `words` [{ w, t0, t1 }] from ElevenLabs' character alignment (same cost either way)."),
       }),
       async (a) => {
         const output_dir = a.out ?? FLOW_OUT;
         mkdirSync(output_dir, { recursive: true });
         const stem = (a.name ?? "").replace(/[^\w.-]+/g, "_") || nextStem(output_dir, "narration");
+        if (a.engine === "elevenlabs") {
+          // The default voice "Charon" is a Gemini name; ElevenLabs needs a voiceId.
+          if (a.voice === "Charon") throw new Error("Engine elevenlabs needs `voice`: a voiceId from flow_elevenlabs_voices.");
+          const target = join(output_dir, `${stem}.${a.format}`);
+          const spoken = await eleven.speak({ text: a.text, voice: a.voice, target, model: a.model, voice_settings: a.voice_settings, language: a.language, timestamps: a.timestamps });
+          return { ...spoken, format: a.format };
+        }
         const tooLong = textLimitError(a.engine, a.text.trim());
         if (tooLong) throw new Error(tooLong);
         if (a.engine === "flow") {

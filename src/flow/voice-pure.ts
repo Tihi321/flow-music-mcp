@@ -292,3 +292,98 @@ export function elevenApiError(status: number, body: string): { code: ElevenCode
   if (status === 429) return { code: "E_ELEVEN_API", message: `rate limited even after waiting; try again in a minute. ${says}` };
   return { code: "E_ELEVEN_API", message: says };
 }
+
+// ---- ElevenLabs narration (FMM-18) ----
+export const ELEVEN_DEFAULT_MODEL = "eleven_multilingual_v2";
+// Allowed on the free tier (pcm_44100, wav_44100 and mp3_44100_192 are paid-only); ffmpeg converts it to the asked format.
+export const ELEVEN_OUTPUT_FORMAT = "mp3_44100_128";
+// Models that take `language_code`; eleven_multilingual_v2 does not (its language follows the text).
+export const ELEVEN_LANGUAGE_CODE_MODELS: readonly string[] = ["eleven_flash_v2_5", "eleven_turbo_v2_5"];
+
+// Credits a line costs: its characters times the model's multiplier, rounded up.
+export const elevenEstimate = (text: string, multiplier: number): number => Math.ceil([...text].length * multiplier);
+
+export interface ElevenGuardInput {
+  text: string;
+  model: string;
+  language?: string;
+  subscription: ElevenSubscription;
+  models: ElevenModel[];
+  reserve: number;
+}
+
+export type ElevenGuard = { ok: true; estimate: number; model: ElevenModel } | { ok: false; code: ElevenCode; message: string; estimate?: number };
+
+// Whether a line may be sent. Checked before every TTS request; a refusal sends nothing. Order: billing risk, model,
+// language, then the quota (refused when estimate > remaining - reserve).
+export function elevenGuard(g: ElevenGuardInput): ElevenGuard {
+  const s = g.subscription;
+  if (s.paidRisk) {
+    return {
+      ok: false,
+      code: "E_ELEVEN_PAID_TIER",
+      message: `the ElevenLabs account is on tier "${s.tier}"${s.canExtend ? " and can extend its character limit (usage-based billing)" : ""}. This engine runs only on the free tier, so nothing can bill money. Nothing was sent.`,
+    };
+  }
+  const model = g.models.find((m) => m.id === g.model);
+  if (!model || !model.tts) {
+    const tts = g.models.filter((m) => m.tts).map((m) => m.id);
+    return { ok: false, code: "E_ELEVEN_MODEL", message: `model "${g.model}" ${model ? "cannot do text to speech" : "is not on this account's model list"}. Text-to-speech models: ${tts.join(", ") || "none"}. Nothing was sent.` };
+  }
+  const lang = g.language ? langOf(g.language) : "";
+  if (lang && !model.languages.includes(lang)) {
+    return { ok: false, code: "E_ELEVEN_LANG", message: `model "${model.id}" does not read "${lang}" (its languages: ${model.languages.join(", ") || "none listed"}). Nothing was sent.` };
+  }
+  const estimate = elevenEstimate(g.text, model.multiplier);
+  const allowed = s.remaining - g.reserve;
+  if (estimate > allowed) {
+    return {
+      ok: false,
+      code: "E_ELEVEN_QUOTA",
+      estimate,
+      message: `this line needs about ${estimate} credits but only ${Math.max(0, allowed)} may be spent (remaining ${s.remaining} minus reserve ${g.reserve}${s.resetAt ? `; the quota resets ${s.resetAt}` : ""}). Use another engine for it. Nothing was sent.`,
+    };
+  }
+  return { ok: true, estimate, model };
+}
+
+export interface ElevenAlignment {
+  characters: string[];
+  character_start_times_seconds: number[];
+  character_end_times_seconds: number[];
+}
+
+export interface TimedWord {
+  w: string;
+  t0: number;
+  t1: number;
+}
+
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+// ElevenLabs' character alignment -> words: split on whitespace, punctuation dropped from each word's edges (inner marks
+// such as an apostrophe stay), letters of any script kept (č ć ž š đ). A "word" with no letter or digit is dropped.
+export function alignmentToWords(a: ElevenAlignment | undefined | null): TimedWord[] {
+  if (!a) return [];
+  const words: TimedWord[] = [];
+  let cur: { ch: string; t0: number; t1: number }[] = [];
+  const flush = () => {
+    let from = 0;
+    let to = cur.length - 1;
+    while (from <= to && !WORD_CHAR.test(cur[from]!.ch)) from++;
+    while (to >= from && !WORD_CHAR.test(cur[to]!.ch)) to--;
+    if (from <= to) {
+      const part = cur.slice(from, to + 1);
+      words.push({ w: part.map((c) => c.ch).join(""), t0: round3(part[0]!.t0), t1: round3(part[part.length - 1]!.t1) });
+    }
+    cur = [];
+  };
+  a.characters.forEach((ch, i) => {
+    if (/^\s+$/u.test(ch)) return flush();
+    cur.push({ ch, t0: a.character_start_times_seconds[i] ?? 0, t1: a.character_end_times_seconds[i] ?? 0 });
+  });
+  flush();
+  return words;
+}
+
+const round3 = (x: number): number => Math.round(x * 1000) / 1000;
