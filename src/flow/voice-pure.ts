@@ -137,3 +137,158 @@ export function voiceNotFoundWarning(voice: string, optionTexts: string[]): stri
     names.length ? `Flow's character voices (the whole scrolled list): ${names.join(", ")}. ` : ""
   }`.trim();
 }
+
+// ---- ElevenLabs (FMM-17) ----
+// Pure parts of the ElevenLabs engine (src/flow/elevenlabs.ts): error codes, the key redactor and the readers of
+// GET /v1/user/subscription, /v1/models and /v1/voices. The free tier only: see CLAUDE.md.
+
+export const ELEVEN_DEFAULT_RESERVE = 200;
+
+export type ElevenCode =
+  | "E_ELEVEN_KEY" // no key, or ElevenLabs refused it (401 invalid key or missing permissions)
+  | "E_ELEVEN_QUOTA" // the line would go past the free quota minus the reserve, or ElevenLabs says quota_exceeded
+  | "E_ELEVEN_PAID_TIER" // the account is not on the free tier or could bill past its limit
+  | "E_ELEVEN_LANG" // the model does not read the line's language
+  | "E_ELEVEN_BLOCKED" // ElevenLabs answered detected_unusual_activity (the free tier blocks some VPNs and proxies)
+  | "E_ELEVEN_MODEL" // the model is not on the account's /v1/models list or cannot do text to speech
+  | "E_ELEVEN_API"; // any other answer, or ElevenLabs could not be reached
+
+// The message starts with the code, so a tool error reads "E_ELEVEN_QUOTA: ...".
+export class ElevenError extends Error {
+  readonly code: ElevenCode;
+  constructor(code: ElevenCode, message: string) {
+    super(`${code}: ${message}`);
+    this.code = code;
+  }
+}
+
+// Every error, log line and result goes through this: the key value becomes "[key]".
+export function redactKey(text: string, key: string | undefined): string {
+  if (!key) return text;
+  return text.split(key).join("[key]");
+}
+
+// FLOW_MUSIC_MCP_ELEVEN_RESERVE: credits always left unused. Unset, empty or not a whole number >= 0 -> 200.
+export function elevenReserve(raw: string | undefined): number {
+  const text = (raw ?? "").trim();
+  const n = text === "" ? NaN : Number(text);
+  return Number.isInteger(n) && n >= 0 ? n : ELEVEN_DEFAULT_RESERVE;
+}
+
+export interface ElevenSubscription {
+  tier: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  resetAt: string | null;
+  canExtend: boolean;
+  // true when the account could be billed: a tier other than "free", or usage-based extension allowed.
+  paidRisk: boolean;
+}
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+export function readSubscription(raw: unknown): ElevenSubscription {
+  const s = (raw ?? {}) as Record<string, unknown>;
+  const tier = typeof s.tier === "string" ? s.tier : "unknown";
+  const used = num(s.character_count);
+  const limit = num(s.character_limit);
+  const reset = num(s.next_character_count_reset_unix);
+  const canExtend = s.can_extend_character_limit === true;
+  return {
+    tier,
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    resetAt: reset > 0 ? new Date(reset * 1000).toISOString() : null,
+    canExtend,
+    paidRisk: tier !== "free" || canExtend,
+  };
+}
+
+export interface ElevenModel {
+  id: string;
+  tts: boolean;
+  hr: boolean;
+  en: boolean;
+  multiplier: number;
+  languages: string[];
+}
+
+// "hr-HR", "HR", "hrv"? -> the two-letter part before any "-" or "_", lower case.
+export const langOf = (code: string): string => code.trim().toLowerCase().split(/[-_]/)[0] ?? "";
+
+// /v1/models is an array of { model_id, can_do_text_to_speech, languages: [{ language_id, name }], model_rates?:
+// { character_cost_multiplier } }. The multiplier is 1.0 when the answer has none.
+export function readModels(raw: unknown): ElevenModel[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return list
+    .map((m) => (m ?? {}) as Record<string, unknown>)
+    .filter((m) => typeof m.model_id === "string")
+    .map((m) => {
+      const languages = (Array.isArray(m.languages) ? m.languages : [])
+        .map((l) => langOf(String(((l ?? {}) as Record<string, unknown>).language_id ?? "")))
+        .filter(Boolean);
+      const rates = (m.model_rates ?? {}) as Record<string, unknown>;
+      const mult = rates.character_cost_multiplier ?? m.character_cost_multiplier;
+      return {
+        id: m.model_id as string,
+        tts: m.can_do_text_to_speech === true,
+        hr: languages.includes("hr"),
+        en: languages.includes("en"),
+        multiplier: typeof mult === "number" && Number.isFinite(mult) && mult > 0 ? mult : 1,
+        languages,
+      };
+    });
+}
+
+export interface ElevenVoice {
+  voiceId: string;
+  name: string;
+  category: string;
+  labels: { gender?: string; age?: string; accent?: string; description?: string };
+}
+
+// /v1/voices -> { voices: [{ voice_id, name, category, labels }] }. Preview URLs are dropped (never downloaded).
+export function readVoices(raw: unknown): ElevenVoice[] {
+  const list = ((raw ?? {}) as Record<string, unknown>).voices;
+  return (Array.isArray(list) ? list : [])
+    .map((v) => (v ?? {}) as Record<string, unknown>)
+    .filter((v) => typeof v.voice_id === "string")
+    .map((v) => {
+      const l = (v.labels ?? {}) as Record<string, unknown>;
+      const s = (x: unknown) => (typeof x === "string" && x ? x : undefined);
+      return {
+        voiceId: v.voice_id as string,
+        name: typeof v.name === "string" ? v.name : "",
+        category: typeof v.category === "string" ? v.category : "",
+        labels: { gender: s(l.gender), age: s(l.age), accent: s(l.accent), description: s(l.description ?? l.descriptive) },
+      };
+    });
+}
+
+// An ElevenLabs error answer -> code and a readable message. Bodies look like { detail: { status, message } } (newer:
+// { detail: { type, code, message } }) or { detail: "text" }. The caller redacts the result.
+export function elevenApiError(status: number, body: string): { code: ElevenCode; message: string } {
+  let detail: unknown;
+  try {
+    detail = (JSON.parse(body) as Record<string, unknown>).detail;
+  } catch {
+    detail = undefined;
+  }
+  const d = (detail && typeof detail === "object" ? detail : {}) as Record<string, unknown>;
+  const kind = [d.status, d.code, d.type].filter((x) => typeof x === "string").join(" ");
+  const said = typeof d.message === "string" ? d.message : typeof detail === "string" ? detail : body.slice(0, 300);
+  const text = `${kind} ${said}`;
+  const says = `ElevenLabs says (${status}${kind ? ` ${kind}` : ""}): ${said || "no detail"}`;
+  if (/quota_exceeded/i.test(text)) return { code: "E_ELEVEN_QUOTA", message: `the free monthly quota is used up for this line. ${says}` };
+  if (/detected_unusual_activity/i.test(text)) {
+    return { code: "E_ELEVEN_BLOCKED", message: `ElevenLabs blocked the free tier for unusual activity (a VPN or proxy can cause it). Nothing was made. ${says}` };
+  }
+  if (status === 401 || status === 403) {
+    const scope = /permission/i.test(text) ? " The key lacks a permission: allow Text to Speech and read access to Voices, Models and User in the key's settings." : "";
+    return { code: "E_ELEVEN_KEY", message: `ElevenLabs refused the key.${scope} ${says}` };
+  }
+  if (status === 429) return { code: "E_ELEVEN_API", message: `rate limited even after waiting; try again in a minute. ${says}` };
+  return { code: "E_ELEVEN_API", message: says };
+}

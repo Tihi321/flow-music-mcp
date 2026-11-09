@@ -5,6 +5,7 @@ import { HOME_DIR } from "../chrome.js";
 import type { Tool } from "../mcp/tools.js";
 import { assemble, voiceTrack } from "./assemble.js";
 import { burnCaptions, captionedName, captionSetup, prepareSpeech, transcribe } from "./captions.js";
+import { eleven } from "./elevenlabs.js";
 import { GEMINI_MODEL, GEMINI_VOICES, speakWithGemini } from "./gemini.js";
 import { languageNote } from "./language-note.js";
 import { keyStatus, setGeminiKey } from "./keys.js";
@@ -89,6 +90,18 @@ export function buildLocalFlowTools(): Tool[] {
           place: { computer: "this PC", platform: process.platform, local_engine: "Windows voice" },
         };
       },
+    ),
+    def(
+      "flow_elevenlabs_status",
+      "ElevenLabs (free tier only) status, read live: `ready`, where the key came from (`source`: env or file; never the key or any part of it), `tier`, credits `used` / `limit` / `remaining` this month, `reserve` (credits never spent, FLOW_MUSIC_MCP_ELEVEN_RESERVE, default 200), `resetAt` (ISO), `paidRisk` (true when the account is not on the free tier or could bill past its limit: flow_narrate then refuses), and `models` [{ id, tts, hr, en, multiplier }] (which models do text to speech and read Croatian and English, and the credits per character). With no key: { ready: false, hint } with the setup steps for the user. There is no tool to set the key: the user puts ELEVENLABS_API_KEY in the environment or ~/.flow-music-mcp/.env.",
+      z.object({}),
+      async () => eleven.status(),
+    ),
+    def(
+      "flow_elevenlabs_voices",
+      "The ElevenLabs voices this account can use with flow_narrate engine elevenlabs: [{ voiceId, name, category, labels: { gender, age, accent, description } }]. On the free tier pick `category: \"premade\"` voices (the Voice Library is not available to free API users). Free (no credits); preview files are never downloaded.",
+      z.object({}),
+      async () => eleven.voices(),
     ),
     def(
       "flow_narrate",

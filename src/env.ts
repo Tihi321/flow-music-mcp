@@ -12,6 +12,9 @@ const REPO_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOME = process.env.FLOW_MUSIC_MCP_HOME ?? join(homedir(), ".flow-music-mcp");
 export const ENV_FILES = [join(REPO_DIR, ".env"), join(HOME, ".env")];
 export const loadedEnvFiles: string[] = [];
+// The real environment as it was before any .env file was read, so a setting can tell where it came from ("env" or
+// "file"; the ElevenLabs key status uses it).
+export const presetEnv: Readonly<Record<string, string | undefined>> = { ...process.env };
 
 for (const file of ENV_FILES) {
   if (!existsSync(file)) continue;

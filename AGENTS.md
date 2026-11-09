@@ -22,6 +22,12 @@ that apply here too (download folder, pacing, virtual lists, never two CDP clien
 - No bot-detection evasion. Drive the real UI at human pace (the queue pauses 20-45 s between generations).
 - When Flow Music changes its UI, fix it here on a ticket branch (`FMM-NN_<what>`), update the UI map below with the date,
   and mark what was verified live.
+- ElevenLabs (`src/flow/elevenlabs.ts`, pure parts in `voice-pure.ts`; FMM-17, FMM-18) is used on the FREE TIER ONLY: never a
+  paid plan, overage, paid-only endpoint or paid-only format. The engine refuses (no TTS request sent) when a line's estimate
+  is above `remaining - reserve` (`E_ELEVEN_QUOTA`) or the account is not free / could bill (`E_ELEVEN_PAID_TIER`); there is
+  no override. The key (`ELEVENLABS_API_KEY`, env or `~/.flow-music-mcp/.env`) is set by the user only: never add a tool
+  that sets or stores it, never ask for it in chat, never log, print or return it (everything goes through `redactKey`;
+  status shows only `ready` and `source`). Requests go one at a time through the module's serial queue.
 
 ## UI map (2026-10-22, Plus plan, mapped read-only from the user's signed-in browser)
 

@@ -42,6 +42,20 @@ A generation runs as a job: the call waits up to `wait` seconds (default 30) and
 
 `flow_narrate` writes `<name>.<format>` with `format` `mp3`, `wav`, `ogg` or `m4a` (default `m4a`). Engines `gemini` (free key, `GEMINI_API_KEY`) and `windows` (free, no key) take text up to 4000 characters; engine `flow` (paid) stays at 400. `flow_voices` lists the Gemini voices with their gender, the TTS model in use (`gemini_model`, default `gemini-3.8-flash-tts`, override with `FLOW_MUSIC_MCP_GEMINI_TTS`) and every Windows voice installed with its culture (`en-US`, `hr-HR` ...). A Gemini 429 says "rate limited": wait about a minute.
 
+### ElevenLabs voices (`flow_elevenlabs_status`, `flow_elevenlabs_voices`)
+
+ElevenLabs is used on its **free tier only** (about 10,000 credits a month; no commercial licence, attribution expected). Setup, done by you and never by an assistant:
+
+1. Make a free account on [elevenlabs.io](https://elevenlabs.io/) and create an API key. If the key dialog offers scopes, allow Text to Speech plus read access to Voices, Models and User, and nothing else.
+2. Put it in the `ELEVENLABS_API_KEY` environment variable, or as `ELEVENLABS_API_KEY=...` in `%USERPROFILE%\.flow-music-mcp\.env` (outside every repo).
+3. Restart flow-music-mcp.
+
+There is no tool that sets or stores this key, so it never passes through a chat. It is sent only as the `xi-api-key` header, and every error, log line and result replaces it with `[key]`.
+
+- `flow_elevenlabs_status` reads the quota live: `{ ready, source ("env" | "file"), tier, used, limit, remaining, reserve, resetAt, paidRisk, models: [{ id, tts, hr, en, multiplier }] }`. With no key it is `{ ready: false, hint }`. `reserve` is `FLOW_MUSIC_MCP_ELEVEN_RESERVE` (default 200 credits never spent). `paidRisk` is true when the account is not on the free tier or could bill past its limit.
+- `flow_elevenlabs_voices` lists the voices the account can use: `[{ voiceId, name, category, labels: { gender, age, accent, description } }]`. Free API users get the `premade` voices, not the Voice Library. Preview files are never downloaded.
+- Requests go one at a time; a 429 waits and retries. Error codes: `E_ELEVEN_KEY` (no key, or the key was refused), `E_ELEVEN_BLOCKED` (ElevenLabs saw "unusual activity"; a VPN or proxy can cause it), `E_ELEVEN_API` (anything else).
+
 ### Assembling a film (`flow_assemble`)
 
 `clips` are played in order; each is a path, `{file, from?, to?}` (a video cut to that part) or `{image, seconds, zoom?}` (a still held for `seconds`, silent, optional slow zoom-in). Music is one `music` bed or `music_cues: [{file, at, until?, volume?, fade_in?, fade_out?}]` (each cue starts at `at`, loops or is cut to `until`, default the film's end; fades default 1.5 s in and 2 s out). `duck: true` lowers the music while `voiceover` / `voice_lines` speak. The result has `timeline` (each clip's start and length) and the placed `music_cues`. Local ffmpeg, no credits.
@@ -66,6 +80,8 @@ Flow asks "Rights to use this image" before it takes a local file (a first frame
 | `FLOW_MUSIC_MCP_HOME` | `~/.flow-music-mcp` | profile, downloads, default output |
 | `FLOW_MUSIC_MCP_CHROME` | found | Chrome executable |
 | `FLOW_MUSIC_MCP_PAUSE_MIN_S` / `_MAX_S` | 20 / 45 | pause between generations |
+| `ELEVENLABS_API_KEY` | unset | ElevenLabs key, set by you only (see "ElevenLabs voices") |
+| `FLOW_MUSIC_MCP_ELEVEN_RESERVE` | 200 | ElevenLabs credits never spent |
 
 ## Tests
 
